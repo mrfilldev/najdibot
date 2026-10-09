@@ -292,7 +292,7 @@ const HELP = [
   "<code>найдибля координаты очко Кирилла</code> — место на карте со стёбом",
   "Матерный запрос — получишь шутку вместо ссылок",
   "Ответь на сообщение чужого бота — я его обматерю (нейросеть)",
-  "<code>депни в казик</code> — крутану автомат 🎰, при проигрыше погорюю",
+  "<code>депни в казик</code> — крутану автомат 🎰: проиграл — погорюю, выиграл — оскорблю кого-нибудь из чата",
   "В группах иногда лаю: ГАВ",
   "В группах читаю чат, сам иногда вставляю слово, реакцию или мем с Reddit. Позови: @najdibot. <code>/forget</code> — стереть всё, что я помню о тебе",
   "",
@@ -343,6 +343,17 @@ const CASINO_LOSS = [
   "Ноль, блядь, ноль. Семёрки вообще ебали меня стороной.",
   "Опять лудомания в минус. Хули я вообще туда полез, пиздец.",
   "Три разных ебучих картинки, нахуй. Рука отвалилась, а толку ноль.",
+];
+// Джекпот: оскорбляем случайного участника чата (из тех, кто писал, по памяти в D1) с тегом.
+const CASINO_WIN = [
+  "ДЖЕКПОТ, нахуй! А {who} как всегда сидит без бабла, лошара ебаная.",
+  "Победа, блядь! {who}, а ты в жизни хоть раз что-нибудь выигрывал, кроме простуды?",
+  "Три в ряд, нахуй! {who}, твой потолок — три хуя на заборе в ряд, не больше.",
+  "Джекпот мой, сука. {who}, завидуй молча, тебе автомат даст только пинка под зад.",
+  "Повезло, блядь! {who}, учись, пока жив, дрищ ебаный.",
+  "Выиграл, нахуй! А {who} в это время проёбывает свою жизнь, как обычно.",
+  "{who}, слышь, ты тупее этого автомата, а это надо ещё постараться, блядь.",
+  "Ебать, семёрки! {who}, тебя бы в этот автомат не пустили даже вместо ручки.",
 ];
 const lastCasino = new Map();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -448,10 +459,20 @@ export default {
           chat_id: msg.chat.id, emoji: "🎰", reply_parameters: { message_id: msg.message_id },
         })).json();
         const v = r.result?.dice?.value;
-        if (v && !JACKPOTS.has(v)) {
-          await sleep(3500); // дать барабанам остановиться, иначе спойлер
+        if (!v) return;
+        await sleep(3500); // дать барабанам остановиться, иначе спойлер
+        if (!JACKPOTS.has(v)) {
           await tg(env, "sendMessage", { chat_id: msg.chat.id, text: CASINO_LOSS[Math.floor(Math.random() * CASINO_LOSS.length)] });
+          return;
         }
+        // выигрыш: случайный участник чата (кто писал), тег через tg://user — работает и без username
+        const row = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id!=0 GROUP BY user_id ORDER BY RANDOM() LIMIT 1")
+          .bind(msg.chat.id).first().catch(() => null);
+        const who = row ? `<a href="tg://user?id=${row.user_id}">${esc(row.name)}</a>` : "все остальные";
+        await tg(env, "sendMessage", {
+          chat_id: msg.chat.id, parse_mode: "HTML",
+          text: CASINO_WIN[Math.floor(Math.random() * CASINO_WIN.length)].replace("{who}", who),
+        });
       })());
       return new Response("ok");
     }
