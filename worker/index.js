@@ -203,7 +203,7 @@ const BOT_ROASTS = [
 ];
 
 // Живая ругань через OpenRouter. При любой ошибке возвращаем null, и вызывающий берёт фразу из BOT_ROASTS.
-async function llmRoast(env, botText, humanText) {
+async function llmRoast(env, botText, humanText, botName = null) {
   if (!env.OPENROUTER_API_KEY) return null;
   try {
     const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -220,11 +220,12 @@ async function llmRoast(env, botText, humanText) {
               "Ты саркастичный Telegram-бот Найдибот в дружеском чате. Другой бот написал сообщение, и ты ругаешь именно его: " +
               "коротко (1-2 предложения), по-русски, с матом и стёбом над тем, что он написал. Иногда подкалывай, что он просто скрипт. " +
               "Человек в чате на твоей стороне: его не ругай и не обращайся к нему, твоя цель только бот-автор. " +
+              (botName ? `Этот бот называется @${botName}: начни реплику с обращения к нему по имени («@${botName}, …») и дай явно понять, что ругаешь именно бота, а не человека, который им воспользовался. ` : "") +
               "Никаких оскорблений по национальности, полу, вере, здоровью и подобному. Без вступлений и кавычек, только сама реплика. " + MEME_HINT + " " + OVERBOARD,
           },
           {
             role: "user",
-            content: `Сообщение чужого бота: «${(botText || "(без текста)").slice(0, 500)}»` +
+            content: `Сообщение чужого бота${botName ? ` @${botName}` : ""}: «${(botText || "(без текста)").slice(0, 500)}»` +
               (humanText ? `\nЧеловек из чата (твой союзник) сказал боту: «${humanText.slice(0, 200)}». Поддержи его и добей бота.` : ""),
           },
         ],
@@ -602,9 +603,11 @@ export default {
     }
     // Сообщение от чужого бота (или через его inline) — посылаем.
     const other = msg?.from?.is_bot ? msg.from : msg?.via_bot;
-    if (other && shouldRoast(msg.chat.id, other.id)) {
+    if (other && shouldRoast(msg.chat.id, other.id, { chance: 0.1 })) { // 1 к 10: чужих ботов не трогаем постоянно
       console.log("roast bot", other.username);
-      await reply(env, msg, esc((await withTyping(env, msg.chat.id, () => llmRoast(env, msg.text || msg.caption))) ?? pickRoast()));
+      const bn = other.username ?? null;
+      const line = (await withTyping(env, msg.chat.id, () => llmRoast(env, msg.text || msg.caption, null, bn))) ?? `${bn ? `@${bn}, ` : ""}${pickRoast()}`;
+      await reply(env, msg, esc(line));
       return new Response("ok");
     }
     // Человек ответил чужому боту: бот-автор виден в reply_to_message, ругаемся прямо под его сообщением.
@@ -614,7 +617,7 @@ export default {
       await tg(env, "sendMessage", {
         chat_id: msg.chat.id,
         reply_parameters: { message_id: target.message_id },
-        text: (await withTyping(env, msg.chat.id, () => llmRoast(env, target.text || target.caption, msg.text))) ?? pickRoast(),
+        text: (await withTyping(env, msg.chat.id, () => llmRoast(env, target.text || target.caption, msg.text, target.from.username ?? null))) ?? `${target.from.username ? `@${target.from.username}, ` : ""}${pickRoast()}`,
       });
       return new Response("ok");
     }
