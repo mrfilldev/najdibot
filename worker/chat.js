@@ -335,8 +335,11 @@ export const BOT_NAMES = "(?:найдибля|найдибот|@najdibot|сан�
 export const ALIAS_RE = new RegExp(`(?<![а-яёa-z@])${BOT_NAMES}(?![а-яёa-z])`, "i");
 export const POKE_RE = new RegExp(`${BOT_NAMES}[\\s,:]*(?:до|при)ебись(?:\\s+(?:до|к)\\s+(.+?))?\\s*[!.?]*$`, "is");
 export const POKE_STOP = new RegExp(`${BOT_NAMES}[\\s,:]*(?:отстань|отвали|хватит|слезь)`, "i");
-const POKE_TURNS = 6; // сколько реплик бот даёт в диалоге
-const POKE_MINUTES = 30;
+const POKE_TURNS = 4; // сколько реплик максимум даёт бот в диалоге
+const POKE_MINUTES = 10; // через сколько минут доёб гаснет сам
+const POKE_DECAY = [1, 0.8, 0.5, 0.3]; // шанс продолжить на 1-й, 2-й, 3-й, 4-й реплике: доёб затухает
+const POKE_QUIT = /отстань|отвали|отъебись|хватит|харе(?![а-яё])|заебал|надоел|достал/i; // если цель просит отстать, сворачиваемся сразу
+const POKE_BYE = ["Ладно, ладно, отвалил, нытик.", "Всё, всё, ушёл. Обидчивый какой, блядь.", "Ну и иди нахуй, не очень-то и хотелось.", "Окей, закрыли тему, душнила."];
 const POKE_GAP = 15_000; // не чаще раза в 15 с на человека
 
 const TR = { а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "h", ц: "c", ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya" };
@@ -426,6 +429,18 @@ export async function pokeContinue(env, tg, msg) {
   const row = await env.DB.prepare("SELECT * FROM pokes WHERE chat_id=? AND user_id=?").bind(chatId, msg.from.id).first();
   const now = Math.floor(Date.now() / 1000);
   if (!row || row.until < now || row.left <= 0 || Date.now() - row.last < POKE_GAP) return false;
+  // затухание: с каждым ходом шанс продолжить падает, при провале доёб тихо гаснет
+  const used = POKE_TURNS - row.left;
+  const said = (msg.text || msg.caption || "");
+  const quit = POKE_QUIT.test(said);
+  if (quit || Math.random() > (POKE_DECAY[used] ?? 0)) {
+    await env.DB.prepare("DELETE FROM pokes WHERE chat_id=? AND user_id=?").bind(chatId, msg.from.id).run();
+    if (quit) {
+      await tg("sendMessage", { chat_id: chatId, text: POKE_BYE[Math.floor(Math.random() * POKE_BYE.length)], reply_parameters: { message_id: msg.message_id } });
+      return true;
+    }
+    return false;
+  }
   await env.DB.prepare("UPDATE pokes SET left=left-1, last=? WHERE chat_id=? AND user_id=?").bind(Date.now(), chatId, msg.from.id).run();
 
   const rows = await history(env, chatId);
