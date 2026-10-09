@@ -179,7 +179,7 @@ export class Downloader extends Container {
   sleepAfter = "10m";
   constructor(ctx, env) {
     super(ctx, env);
-    this.envVars = { BOT_TOKEN: env.BOT_TOKEN };
+    this.envVars = { BOT_TOKEN: env.BOT_TOKEN, YT_COOKIES_GZB64: env.YT_COOKIES_GZB64 ?? "" };
   }
 }
 

@@ -5,3 +5,4 @@ bot.log
 node_modules/
 .wrangler/
 .dev.vars
+cookies*.txt

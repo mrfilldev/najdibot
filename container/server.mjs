@@ -6,10 +6,26 @@ import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { openAsBlob } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
+import { writeFileSync } from "node:fs";
 
 const TOKEN = process.env.BOT_TOKEN;
 const MAX_MB = 50; // лимит Bot API на отправку файла
 const API = `https://api.telegram.org/bot${TOKEN}`;
+
+// Cookies YouTube (нужны для роликов 18+ и против «подтвердите, что вы не бот»).
+// Приходят секретом как gzip+base64 текста cookies.txt; yt-dlp пишет в файл, поэтому кладём в /tmp.
+const COOKIES = "/tmp/yt-cookies.txt";
+let cookieArgs = [];
+if (process.env.YT_COOKIES_GZB64) {
+  try {
+    writeFileSync(COOKIES, gunzipSync(Buffer.from(process.env.YT_COOKIES_GZB64, "base64")));
+    cookieArgs = ["--cookies", COOKIES];
+    console.log("youtube cookies loaded");
+  } catch (e) {
+    console.error("cookies broken:", e.message);
+  }
+}
 
 const tg = (method, body) =>
   fetch(`${API}/${method}`, {
@@ -58,7 +74,7 @@ async function download({ chat_id, message_id, url }) {
   try {
     await tg("sendChatAction", { chat_id, action: "upload_video" });
     await run("yt-dlp", [
-      "--no-playlist",
+      "--no-playlist", ...cookieArgs,
       "--max-filesize", `${MAX_MB}M`,
       // H.264 + AAC: AV1/VP9 на части устройств Telegram показывает чёрный экран
       "-f", `bv*[vcodec^=avc1][height<=720]+ba[acodec^=mp4a]/b[vcodec^=avc1][height<=720]/bv*[height<=720]+ba/b`,
@@ -100,7 +116,7 @@ async function audio({ chat_id, message_id, query }) {
     // Ссылка качается как есть, текст ищется на YouTube (первый результат).
     const src = /^https?:\/\//i.test(query) ? query : `ytsearch1:${query}`;
     await run("yt-dlp", [
-      "--no-playlist",
+      "--no-playlist", ...cookieArgs,
       "--max-filesize", `${MAX_MB}M`,
       "--match-filters", "duration<900", // не тащим часовые миксы
       "-x", "--audio-format", "mp3", "--audio-quality", "192K",
