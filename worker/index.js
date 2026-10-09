@@ -292,6 +292,7 @@ const HELP = [
   "<code>найдибля координаты очко Кирилла</code> — место на карте со стёбом",
   "Матерный запрос — получишь шутку вместо ссылок",
   "Ответь на сообщение чужого бота — я его обматерю (нейросеть)",
+  "<code>депни в казик</code> — крутану автомат 🎰, при проигрыше погорюю",
   "В группах иногда лаю: ГАВ",
   "В группах читаю чат, сам иногда вставляю слово, реакцию или мем с Reddit. Позови: @najdibot. <code>/forget</code> — стереть всё, что я помню о тебе",
   "",
@@ -327,6 +328,24 @@ const CITIES = [
   ["краснодар", 45.0355, 38.9753, "Краснодар"],
 ];
 const lastWeather = new Map();
+
+// «депни в казик» — игровой автомат Telegram; при проигрыше после остановки барабанов горюем с матом.
+const CASINO = /деп\S*\s+(?:в\s+)?каз\S*/i;
+const JACKPOTS = new Set([1, 22, 43, 64]); // значения 🎰: BAR BAR BAR, три винограда, три лимона, 777
+const CASINO_LOSS = [
+  "Блядь, опять мимо, нахуй. Казино всегда выигрывает, пиздец.",
+  "Нихуя не выпало, сука. Депнул и проебал, как обычно.",
+  "Мимо, блядь, мимо! Ебаный автомат, чтоб тебя заклинило.",
+  "Проебал всё нахуй. Бабки улетели, а я стою как дебил.",
+  "Ну и хуйня, ни одной комбинации. Это не казино, а грабёж, блядь.",
+  "Сука, снова пусто. Давай ещё раз, потом квартиру на кон, нахуй.",
+  "Да иди ты нахуй, автомат, я же чувствовал, что слью всё, блядь.",
+  "Ноль, блядь, ноль. Семёрки вообще ебали меня стороной.",
+  "Опять лудомания в минус. Хули я вообще туда полез, пиздец.",
+  "Три разных ебучих картинки, нахуй. Рука отвалилась, а толку ноль.",
+];
+const lastCasino = new Map();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const SYMPHONY = /робот\s+может\s+сочинить\s+симфони/i;
 
@@ -420,6 +439,20 @@ export default {
           body: JSON.stringify({ chat_id: msg.chat.id, message_id: msg.message_id, city: city[3], lat: city[1], lon: city[2] }),
         }),
       );
+      return new Response("ok");
+    }
+    if (text && CASINO.test(text) && Date.now() - (lastCasino.get(msg.chat.id) ?? 0) > 4000) {
+      lastCasino.set(msg.chat.id, Date.now());
+      ctx.waitUntil((async () => {
+        const r = await (await tg(env, "sendDice", {
+          chat_id: msg.chat.id, emoji: "🎰", reply_parameters: { message_id: msg.message_id },
+        })).json();
+        const v = r.result?.dice?.value;
+        if (v && !JACKPOTS.has(v)) {
+          await sleep(3500); // дать барабанам остановиться, иначе спойлер
+          await tg(env, "sendMessage", { chat_id: msg.chat.id, text: CASINO_LOSS[Math.floor(Math.random() * CASINO_LOSS.length)] });
+        }
+      })());
       return new Response("ok");
     }
     if (text && SYMPHONY.test(text)) {
