@@ -311,8 +311,8 @@ const sendGav = (env, msg) => sendVoice(env, msg, GAV_OGG_B64, GAV_DURATION, "ga
 // Оскорбление в адрес бота: обращение к нему + ругательное слово. Отвечаем голосовым с шансом INSULT_CHANCE.
 const INSULT = /тупо|тупой|тупая|дебил|идиот|говн|гавн|мраз|урод|(?<![а-яё])лох(?![а-яё])|чмо|хуйн|хуесос|сука|суки|пидор|пидр|нахуй|нахер|заткнись|заткни|ебан|долбо|мудак|мудил|гандон|шлюх|тварь|иди ты|пошёл|пошел|отстой|мусор/i;
 const TO_BOT = /найдибот|найдибля|(?<![а-яё])бот(?![а-яё])|@najdibot/i;
-const INSULT_CHANCE = 0.4;
-const INSULT_COOLDOWN = 30_000;
+const INSULT_CHANCE = 1;
+const INSULT_COOLDOWN = 3_000;
 const lastInsult = new Map();
 function insultReply(chatId, text, toUs) {
   if (!(toUs || TO_BOT.test(text)) || !INSULT.test(text)) return false;
