@@ -12,6 +12,14 @@ const PLATFORMS = [
 const esc = (s) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+// Триггер в чате: сообщение начинается со слова «найдибля», дальше запрос.
+const TRIGGER = /^найдибля[\s,:;!.-]+(.{2,})$/is;
+
+function linksText(query) {
+  const q = encodeURIComponent(query).replace(/%20/g, "+");
+  return PLATFORMS.map(([name, base]) => `<a href="${esc(base + q)}">${name}</a>`).join(" · ");
+}
+
 function buildResults(query) {
   const q = encodeURIComponent(query).replace(/%20/g, "+");
   return PLATFORMS.map(([name, base], i) => ({
@@ -46,6 +54,23 @@ export default {
           inline_query_id: inline.id,
           results,
           cache_time: results.length ? 300 : 1,
+        }),
+      });
+    }
+
+    const msg = update.message;
+    const m = msg?.text && msg.text.trim().match(TRIGGER);
+    if (m) {
+      const query = m[1].trim();
+      await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          chat_id: msg.chat.id,
+          reply_parameters: { message_id: msg.message_id },
+          text: `Ищу «${esc(query)}»:\n${linksText(query)}`,
+          parse_mode: "HTML",
+          link_preview_options: { is_disabled: true },
         }),
       });
     }
