@@ -308,20 +308,8 @@ async function sendVoice(env, msg, b64, duration, name) {
 
 const sendGav = (env, msg) => sendVoice(env, msg, GAV_OGG_B64, GAV_DURATION, "gav.ogg");
 
-// Оскорбление в адрес бота: обращение к нему + ругательное слово. Отвечаем голосовым с шансом INSULT_CHANCE.
-const INSULT = /тупо|тупой|тупая|дебил|идиот|говн|гавн|мраз|урод|(?<![а-яё])лох(?![а-яё])|чмо|хуйн|хуесос|сука|суки|пидор|пидр|нахуй|нахер|заткнись|заткни|ебан|долбо|мудак|мудил|гандон|шлюх|тварь|иди ты|пошёл|пошел|отстой|мусор/i;
-const TO_BOT = /найдибот|найдибля|(?<![а-яё])бот(?![а-яё])|@najdibot/i;
-const INSULT_CHANCE = 1;
-const INSULT_COOLDOWN = 3_000;
-const lastInsult = new Map();
-function insultReply(chatId, text, toUs) {
-  if (!(toUs || TO_BOT.test(text)) || !INSULT.test(text)) return false;
-  const now = Date.now();
-  if (now - (lastInsult.get(chatId) ?? 0) < INSULT_COOLDOWN) return false;
-  if (Math.random() > INSULT_CHANCE) return false;
-  lastInsult.set(chatId, now);
-  return true;
-}
+// Голосовое отвечает только на эту фразу («а робот может сочинить симфонию?»), в любом чате.
+const SYMPHONY = /робот\s+может\s+сочинить\s+симфони/i;
 
 const PLAY = /^сыграйбля[\s,:;!.-]+(.{2,})$/is;
 const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
@@ -392,6 +380,10 @@ export default {
     const t = text && !text.startsWith("/")
       ? (parseTrigger(text) || (isPrivate ? { cats: CATEGORIES, query: text } : null))
       : null;
+    if (text && SYMPHONY.test(text)) {
+      await sendVoice(env, msg, INSULT_OGG_B64, INSULT_DURATION, "symphony.ogg");
+      return new Response("ok");
+    }
     if (text && GAV_CALL.test(text)) {
       await sendGav(env, msg);
       return new Response("ok");
@@ -456,10 +448,6 @@ export default {
     if (text && !isPrivate && !text.startsWith("/")) {
       const ownUsername = /@najdibot\b/i.test(text);
       const toUs = msg.reply_to_message?.from?.id === ownId;
-      if (insultReply(msg.chat.id, text, toUs)) {
-        await sendVoice(env, msg, INSULT_OGG_B64, INSULT_DURATION, "insult.ogg");
-        return new Response("ok");
-      }
       if (await maybeChat(env, msg, (m, b) => tg(env, m, b), { forced: ownUsername || toUs })) {
         return new Response("ok");
       }
