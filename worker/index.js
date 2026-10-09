@@ -501,7 +501,9 @@ export default {
         await reply(env, msg, n ? "Ладно, отвалил." : "Я и так ни к кому не доёбываюсь.");
         return new Response("ok");
       }
-      if (!text.startsWith("/") && (await pokeContinue(env, (m, b) => tg(env, m, b), msg).catch(() => false))) {
+      // Специальные триггеры (голосовые, казино, погода, музыка, ссылки на видео) важнее продолжения доёба.
+      const special = SYMPHONY.test(text) || GAV_CALL.test(text) || CASINO.test(text) || WEATHER.test(text) || PLAY.test(text) || VIDEO_URL.test(text) || MOD_CMD.test(text);
+      if (!text.startsWith("/") && !special && (await pokeContinue(env, (m, b) => tg(env, m, b), msg).catch(() => false))) {
         return new Response("ok");
       }
     }
