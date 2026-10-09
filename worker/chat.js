@@ -494,26 +494,34 @@ export async function convoRecent(env, chatId, userId) {
 }
 
 // LLM решает: реплика продолжает разговор с ботом или обращена к другим / общая.
-export async function isForBot(env, msg) {
+export async function isForBot(env, msg, debug = false) {
   if (!env.OPENROUTER_API_KEY) return false;
   const rows = (await history(env, msg.chat.id)).slice(-9);
   const name = msg.from?.first_name || "участник";
   const text = (msg.text || msg.caption || "").slice(0, 500);
   const log = rows.map((r) => `${r.name}: ${r.text}`).join("\n");
-  const sys = "Ты определяешь, к кому обращено последнее сообщение в групповом чате. Участник только что разговаривал с ботом Найдиботом (его зовут также Санни, Саныч, Саня). Ответь BOT, если последнее сообщение логично продолжает разговор с ботом (реакция на его реплику, ответ на его вопрос, просьба или вопрос, которые адресованы ему), и OTHER, если оно адресовано другим людям, является общей репликой не про бота или началом новой темы для всех. Ответ одним словом: BOT или OTHER.";
-  try {
-    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
-      signal: AbortSignal.timeout(8_000),
-      body: JSON.stringify({ model: env.LLM_MODEL, max_tokens: 5, temperature: 0, messages: [{ role: "system", content: sys }, { role: "user", content: `Последние сообщения:\n${log}\n\nПоследнее сообщение от ${name}: ${text}\n\nК кому оно обращено?` }] }),
-    });
-    const out = (await r.json()).choices?.[0]?.message?.content ?? "";
-    const yes = /BOT/i.test(out) && !/OTHER/i.test(out);
-    if (yes) await convoTouch(env, msg.chat.id, msg.from.id).catch(() => {});
-    return yes;
-  } catch (e) {
-    console.error("isForBot failed:", e.message);
-    return false;
+  const sys = "Ты определяешь, к кому обращено последнее сообщение в групповом чате. Участник только что разговаривал с ботом Найдиботом (его зовут также Санни, Саныч, Саня). Ответь BOT, если последнее сообщение логично продолжает разговор с ботом (реакция на его реплику, ответ на его вопрос, просьба или вопрос, которые адресованы ему), и OTHER, если оно адресовано другим людям, является общей репликой не про бота или началом новой темы для всех. Если участник сам пишет, что говорит или говорил боту («я это боту говорю», «это не тебе, а боту»), это BOT. Ответ одним словом: BOT или OTHER.";
+  let lastError = null;
+  // до двух попыток: сбой или таймаут модели не должен молча оставлять человека без ответа
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
+        signal: AbortSignal.timeout(15_000),
+        body: JSON.stringify({ model: env.LLM_MODEL, max_tokens: 5, temperature: 0, messages: [{ role: "system", content: sys }, { role: "user", content: `Последние сообщения:\n${log}\n\nПоследнее сообщение от ${name}: ${text}\n\nК кому оно обращено?` }] }),
+      });
+      const out = (await r.json()).choices?.[0]?.message?.content ?? "";
+      if (!out) throw new Error("пустой ответ модели");
+      const yes = /BOT/i.test(out) && !/OTHER/i.test(out);
+      console.log("isForBot", yes, JSON.stringify(text.slice(0, 60)));
+      if (debug) return { yes, raw: out, rows: rows.length, log };
+      if (yes) await convoTouch(env, msg.chat.id, msg.from.id).catch(() => {});
+      return yes;
+    } catch (e) {
+      lastError = e.message;
+      console.error("isForBot failed:", e.message);
+    }
   }
+  return debug ? { yes: false, error: lastError } : false;
 }

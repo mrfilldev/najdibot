@@ -432,6 +432,12 @@ export default {
     }
 
     const update = await request.json();
+    // Служебное: dbg_convo {chat_id, user_id, name, text} — прогнать классификатор «к боту ли реплика» по реальной истории, ничего не отправляя.
+    if (update.dbg_convo) {
+      const d = update.dbg_convo;
+      const msg = { chat: { id: d.chat_id }, from: { id: d.user_id, first_name: d.name }, text: d.text };
+      return Response.json({ recent: await convoRecent(env, d.chat_id, d.user_id), verdict: await isForBot(env, msg, true) });
+    }
     const inline = update.inline_query;
     if (inline) {
       const raw = inline.query.trim();
