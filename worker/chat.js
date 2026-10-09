@@ -709,3 +709,15 @@ export async function forceReassess(env, chatId) {
   await env.DB.prepare("DELETE FROM moods WHERE chat_id=?").bind(chatId).run();
   return getMood(env, chatId);
 }
+
+// Извинение перед ботом: отношение поднимается минимум до +2 (если уже выше, не трогаем).
+export const APOLOGY_RE = /(?<![а-яё])(?:извин\S*|прост(?:и|ите)(?![а-яё])|сорян|сори(?![а-яё])|пардон|виноват\S*|погорячился|погорячилась|мой косяк)/i;
+
+export async function apologize(env, chatId, userId, name) {
+  if (!env.DB || !userId) return false;
+  const cur = await loadFeeling(env, chatId, userId);
+  if (cur && cur.score >= 2) return false;
+  await env.DB.prepare("INSERT OR REPLACE INTO feelings (chat_id, user_id, name, score, note, updated) VALUES (?,?,?,?,?,?)")
+    .bind(chatId, userId, name || cur?.name || "кто-то", 2, "извинился передо мной", Math.floor(Date.now() / 1000)).run().catch(() => {});
+  return true;
+}

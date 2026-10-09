@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { ALIAS_RE, MEME_HINT, OVERBOARD, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { ALIAS_RE, APOLOGY_RE, MEME_HINT, OVERBOARD, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -701,6 +701,10 @@ export default {
       const addressed = ownUsername || toUs;
       const toSomeoneElse = msg.reply_to_message && msg.reply_to_message.from?.id !== ownId;
       const inConvo = !addressed && !toSomeoneElse && (await convoRecent(env, msg.chat.id, msg.from.id).catch(() => false)) && (await isForBot(env, msg));
+      // Извинился перед ботом: выводим отношение в +2 (раньше ответа, чтобы тон уже был мягче).
+      if ((addressed || inConvo) && APOLOGY_RE.test(text)) {
+        await apologize(env, msg.chat.id, msg.from.id, msg.from.first_name).catch(() => {});
+      }
       // Похвалили бота прямо в разговоре: отношение к человеку теплеет.
       if ((addressed || inConvo) && /спасиб|молодец|красав|умниц|лучший|люблю тебя|ты крут|респект|обожаю/i.test(text)) {
         await bumpFeeling(env, msg.chat.id, msg.from.id, msg.from.first_name, 1, "хвалил меня").catch(() => {});
