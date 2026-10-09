@@ -234,7 +234,7 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
     // ссылки из сообщения и из того, на которое ответили: открываем сразу (до двух), чтобы бот видел страницу, а не только адрес
     const urls = [...new Set([...(msg.text || "").matchAll(URL_RE), ...((rep?.text || rep?.caption || "").matchAll(URL_RE))].map((m) => m[0]))].slice(0, 2);
     const extra = forced && urls.length ? (await Promise.all(urls.map(async (u) => `[${u}]\n${await openUrl(u)}`))).join("\n\n").slice(0, 9000) : "";
-    const mood = (await moodPrompt(env, chatId)) + (forced ? `\n${await relationPrompt(env, chatId, msg.from.id, msg.from?.first_name || "собеседник")}\n${await relationsSummary(env, chatId)}` : "");
+    const mood = (await moodPrompt(env, chatId, forced ? { id: msg.from?.id, name: msg.from?.first_name } : null)) + (forced ? `\n${await relationPrompt(env, chatId, msg.from.id, msg.from?.first_name || "собеседник")}\n${await relationsSummary(env, chatId)}` : "");
     const asker = forced ? { name: msg.from?.first_name || msg.from?.username || "собеседник", text: (msg.text || msg.caption || "").slice(0, 700) } : null;
     let d = await decide(env, rows, forced, replied, extra, asker, mood).catch((e) => (console.error("decide", e.message), null));
     // На прямое обращение молчать нельзя: один повтор, потом запасная фраза.
@@ -565,8 +565,9 @@ async function reassessMood(env, chatId, prev) {
   const hour = new Date(Date.now() + 3 * 3600_000).getUTCHours(); // МСК
   const sys = `Ты психика бота Санни (он же Найдибот, Саныч). Реши, какое у него сейчас настроение, исходя из недавней переписки, прошлого настроения и времени суток. Варианты: ${Object.keys(MOODS).join(", ")}.
 Что на него влияет: оскорбления и «тупой бот» бесят или обижают, хвалят и общаются с ним по-доброму радует, игнор и тишина вгоняют в грусть или скуку, споры вокруг и шум бесят, разговоры о смысле жизни тянут в философию, ночью бывает сонным, упоминания других ботов вызывают ревность. Настроение должно меняться не слишком резко, но может, иногда без видимой причины.
-Заодно отметь, как изменилось твоё отношение к тем людям, кто явно повлиял на тебя (похвалил, обидел, рассмешил, надоел): максимум трое, сдвиг +1 или -1, заметка от первого лица (до 60 символов), имена бери ровно как в переписке.\nВерни ТОЛЬКО JSON: {"mood":"одно из вариантов","intensity":число от 1 до 5,"reason":"коротко от первого лица, до 60 символов","relations":[{"name":"имя","delta":1,"note":"почему"}]}.`;
-  const user = `Прошлое настроение: ${prev ? `${prev.mood} (${prev.intensity}/5, причина: ${prev.reason})` : "нет"}.\nСейчас ${hour}:00 по Москве.\nПоследние сообщения:\n${rows.map((r) => `${r.name}: ${String(r.text).slice(0, 200)}`).join("\n") || "(тихо)"}`;
+Не называй причиной злости, обиды или грусти человека, к которому у тебя тёплое отношение (+3 и выше, оно указано ниже): причину формулируй общо («все достали», «шумно») или на тех, кто реально виноват. Заодно отметь, как изменилось твоё отношение к тем людям, кто явно повлиял на тебя (похвалил, обидел, рассмешил, надоел): максимум трое, сдвиг +1 или -1, заметка от первого лица (до 60 символов), имена бери ровно как в переписке.\nВерни ТОЛЬКО JSON: {"mood":"одно из вариантов","intensity":число от 1 до 5,"reason":"коротко от первого лица, до 60 символов","relations":[{"name":"имя","delta":1,"note":"почему"}]}.`;
+  const rel = await relationsSummary(env, chatId).catch(() => "");
+  const user = `${rel ? `${rel}\n` : ""}Прошлое настроение: ${prev ? `${prev.mood} (${prev.intensity}/5, причина: ${prev.reason})` : "нет"}.\nСейчас ${hour}:00 по Москве.\nПоследние сообщения:\n${rows.map((r) => `${r.name}: ${String(r.text).slice(0, 200)}`).join("\n") || "(тихо)"}`;
   const out = await ask(env, sys, user, 260);
   try {
     const j = JSON.parse(out.match(/\{[\s\S]*\}/)[0]);
@@ -587,10 +588,16 @@ export async function getMood(env, chatId) {
 }
 
 // Кусок промпта про текущее настроение (пусто, если настроения нет).
-export async function moodPrompt(env, chatId) {
+export async function moodPrompt(env, chatId, asker = null) {
   const m = await getMood(env, chatId).catch(() => null);
   if (!m) return "";
-  return `Твоё настроение сейчас: «${m.mood}» (сила ${m.intensity}/5; причина: ${m.reason}). ${MOODS[m.mood]}. Пусть оно чувствуется в тоне реплик; иногда (не всегда) можешь прямо сказать, что тебя бесит или тебе грустно, и почему. Настроение окрашивает ответ, но не заменяет ответа по существу. Оно слабее личного отношения: с теми, к кому ты тепло относишься, настроение не должно превращаться в настоящую грубость.`;
+  let reason = m.reason;
+  // Если причина настроения называет собеседника, которого он любит (+3 и выше), подменяем её: это не повод грубить именно ему.
+  if (asker?.id && asker.name && reason.toLowerCase().includes(String(asker.name).toLowerCase())) {
+    const f = await loadFeeling(env, chatId, asker.id).catch(() => null);
+    if (f && f.score >= 3) reason = "накопилось от всего подряд, но точно не из-за этого человека";
+  }
+  return `Твоё настроение сейчас: «${m.mood}» (сила ${m.intensity}/5; причина: ${reason}). ${MOODS[m.mood]}. Пусть оно чувствуется в тоне реплик; иногда (не всегда) можешь прямо сказать, что тебя бесит или тебе грустно, и почему. Настроение окрашивает ответ, но не заменяет ответа по существу. Оно слабее личного отношения: с теми, к кому ты тепло относишься, настроение не должно превращаться в настоящую грубость.`;
 }
 
 export async function moodStatus(env, chatId) {
