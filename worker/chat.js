@@ -167,7 +167,7 @@ export async function decide(env, rows, forced, replied = null, extra = "", aske
     : userText;
   const tools = forced && env.OPENROUTER_API_KEY;
   const system = forced
-    ? `${SYSTEM}\n\nСейчас разрешено только действие text: {"action":"text","text":"реплика"}. Правило про «1-2 фразы» тут НЕ действует: на прямое обращение отвечай развёрнуто, 3-6 предложений (до 900 символов). Если обращаются ответом на сообщение (новость, пост, фото, ссылка), разбери его по существу: назови 1-2 конкретных пункта оттуда, выскажи свою позицию, обыграй мемом или чёрным юмором и закончи подколкой или встречным вопросом. Не ограничивайся общими шутками про заголовок. Отвечай с матом.\nНе путай авторов: отвечай тому, кто тебя позвал (он указан в запросе), а автор сообщения, на которое он ответил, это другой человек (или он сам), и слова из того сообщения принадлежат ему, а не собеседнику. Имена Санни, Sunny, Саныч, Саня, Сань, Санёк, найдибот — это ТВОИ имена: никогда не называй ими собеседника. Не придумывай «тут пишут» и не ссылайся на неизвестные источники: поиском пользуйся только для настоящих фактов (цены, новости, характеристики), а не для шуток про людей из чата.\nУ тебя есть инструменты: web_search (поиск в интернете) и open_url (прочитать страницу). Если вопрос про цены, новости, характеристики, даты или любые факты, которые ты не знаешь точно, СНАЧАЛА вызови web_search и опирайся на найденные цифры, не выдумывай их. Итоговый ответ всегда в JSON {"action":"text","text":"…"}.`
+    ? `${SYSTEM}\n\nСейчас разрешено только действие text: {"action":"text","text":"реплика"}. Правило про «1-2 фразы» тут НЕ действует: на прямое обращение отвечай развёрнуто, 3-6 предложений (до 900 символов). Если обращаются ответом на сообщение (новость, пост, фото, ссылка), разбери его по существу: назови 1-2 конкретных пункта оттуда, выскажи свою позицию, обыграй мемом или чёрным юмором и закончи подколкой или встречным вопросом. Не ограничивайся общими шутками про заголовок. Отвечай с матом.\nНе путай авторов: отвечай тому, кто тебя позвал (он указан в запросе), а автор сообщения, на которое он ответил, это другой человек (или он сам), и слова из того сообщения принадлежат ему, а не собеседнику. Имена Санни, Sunny, Саныч, Саня, Сань, Санёк, найдибот — это ТВОИ имена: никогда не называй ими собеседника. Не придумывай «тут пишут» и не ссылайся на неизвестные источники: поиском пользуйся только для настоящих фактов (цены, новости, характеристики), а не для шуток про людей из чата.\nУ тебя есть инструменты: web_search (поиск в интернете) и open_url (прочитать страницу). Если вопрос про цены, новости, характеристики, даты или любые факты, которые ты не знаешь точно, СНАЧАЛА вызови web_search и опирайся на найденные цифры, не выдумывай их. Итоговый ответ всегда в JSON {"action":"text","text":"…","feel":{"delta":0,"note":""}}. Поле feel — как ТЕБЯ зацепила реплика собеседника: delta -1, если он нагрубил, обидел или достал; +1, если рассмешил, похвалил или был мил; 0, если ничего особенного. note — коротко от первого лица, почему (до 50 символов).`
     : SYSTEM;
   const out = await complete(env, [{ role: "system", content: system + (mood ? `\n\n${mood}` : "") }, { role: "user", content }], { tools, maxTokens: forced ? 1100 : 400 });
   return parseDecision(out, forced);
@@ -262,6 +262,9 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
         : { chat_id: chatId, text });
       await remember(env, chatId, 0, "Найдибот", text);
       if (forced) await convoTouch(env, chatId, msg.from.id).catch(() => {});
+      // отношение к собеседнику сдвигается по оценке самой модели (не чаще раза в 2 минуты на человека)
+      const fd = Math.max(-1, Math.min(1, Number(d.feel?.delta) | 0));
+      if (forced && fd !== 0) await bumpFeeling(env, chatId, msg.from.id, msg.from?.first_name || msg.from?.username, fd, d.feel?.note, 120).catch(() => {});
       return true;
     }
   } catch (e) {
@@ -569,6 +572,7 @@ async function reassessMood(env, chatId, prev) {
   const rel = await relationsSummary(env, chatId).catch(() => "");
   const user = `${rel ? `${rel}\n` : ""}Прошлое настроение: ${prev ? `${prev.mood} (${prev.intensity}/5, причина: ${prev.reason})` : "нет"}.\nСейчас ${hour}:00 по Москве.\nПоследние сообщения:\n${rows.map((r) => `${r.name}: ${String(r.text).slice(0, 200)}`).join("\n") || "(тихо)"}`;
   const out = await ask(env, sys, user, 260);
+  console.log("reassess", String(out).slice(0, 300));
   try {
     const j = JSON.parse(out.match(/\{[\s\S]*\}/)[0]);
     if (Array.isArray(j.relations)) await applyRelations(env, chatId, j.relations).catch(() => {});
@@ -619,9 +623,10 @@ async function loadFeeling(env, chatId, userId) {
   return { ...row, score };
 }
 
-export async function bumpFeeling(env, chatId, userId, name, delta, note) {
+export async function bumpFeeling(env, chatId, userId, name, delta, note, minGapSec = 0) {
   if (!env.DB || !userId) return;
   const cur = await loadFeeling(env, chatId, userId);
+  if (minGapSec && cur && Math.floor(Date.now() / 1000) - cur.updated < minGapSec) return;
   const score = Math.min(Math.max((cur?.score ?? 0) + delta, -5), 5);
   await env.DB.prepare("INSERT OR REPLACE INTO feelings (chat_id, user_id, name, score, note, updated) VALUES (?,?,?,?,?,?)")
     .bind(chatId, userId, name || cur?.name || "кто-то", score, String(note || cur?.note || "").slice(0, 100), Math.floor(Date.now() / 1000)).run().catch(() => {});
@@ -659,7 +664,7 @@ export async function applyRelations(env, chatId, relations) {
   if (!Array.isArray(relations)) return;
   const { results: people } = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id!=0 GROUP BY user_id").bind(chatId).all();
   for (const r of relations.slice(0, 3)) {
-    const p = people.find((x) => x.name === r?.name);
+    const p = people.find((x) => x.name === r?.name) ?? matchName(String(r?.name || ""), people);
     const d = Math.max(-1, Math.min(1, Number(r?.delta) | 0));
     if (p && d !== 0) await bumpFeeling(env, chatId, p.user_id, p.name, d, r.note);
   }
@@ -674,4 +679,10 @@ export async function relationsSummary(env, chatId) {
   }).filter((r) => r.score !== 0);
   if (!rows.length) return "";
   return `Твои личные отношения с людьми чата (от -5 до +5): ${rows.map((r) => `${r.name} ${r.score > 0 ? "+" : ""}${r.score} (${FEEL_WORDS(r.score)}${r.note ? `, ${r.note}` : ""})`).join("; ")}. Если тебя спросят, как ты к кому-то относишься, ответь честно по этим данным, в своём стиле и с причиной, словами, без цифр и без слов вроде «плюс два» или «минус два»; про тех, кого здесь нет, скажи, что особых чувств нет.`;
+}
+
+// Служебное: сбросить настроение и переоценить сейчас (проверка без ожидания 25 минут).
+export async function forceReassess(env, chatId) {
+  await env.DB.prepare("DELETE FROM moods WHERE chat_id=?").bind(chatId).run();
+  return getMood(env, chatId);
 }

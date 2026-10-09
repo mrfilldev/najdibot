@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { ALIAS_RE, MEME_HINT, OVERBOARD, bumpFeeling, feelingsStatus, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { ALIAS_RE, MEME_HINT, OVERBOARD, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -435,6 +435,10 @@ export default {
 
     const update = await request.json();
     // Служебное: dbg_convo {chat_id, user_id, name, text} — прогнать классификатор «к боту ли реплика» по реальной истории, ничего не отправляя.
+    if (update.dbg_reassess) {
+      const m = await forceReassess(env, update.dbg_reassess.chat_id);
+      return Response.json({ mood: m, relations: await feelingsStatus(env, update.dbg_reassess.chat_id) });
+    }
     if (update.dbg_convo) {
       const d = update.dbg_convo;
       const msg = { chat: { id: d.chat_id }, from: { id: d.user_id, first_name: d.name }, text: d.text };
