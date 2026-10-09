@@ -411,8 +411,13 @@ export default {
       const t = parseTrigger(raw);
       const query = t ? t.query : raw;
       const c = query.match(COORDS);
+      // Команды чату («@najdibot доебись до …», вопросы, казино, погода): inline-поиск по магазинам не показываем.
+      const commandLike = POKE_RE.test(raw) || POKE_STOP.test(raw) || /^(?:до|при)ебись/i.test(raw) || /^(?:отстань|отвали|хватит|слезь)(?![а-яё])/i.test(raw) || /\?\s*$/.test(raw) ||
+        /^(?:сыграйбля|депни|деп\S*\s+(?:в\s+)?каз)/i.test(raw) || /погод\S*\s+(?:сейчас\s+|щас\s+|сегодня\s+)?(?:в|во)\s+/i.test(raw);
       let results;
-      if (c) {
+      if (commandLike && !c) {
+        results = [];
+      } else if (c) {
         const [lat, lng, name, note] = placeFor(c[1].trim());
         results = [{
           type: "venue", id: "coords", latitude: lat, longitude: lng,
