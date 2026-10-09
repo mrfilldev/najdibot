@@ -26,6 +26,32 @@ const run = (cmd, args) =>
     p.on("close", (code) => (code === 0 ? resolve() : reject(new Error(err.slice(-300)))));
   });
 
+const out = (cmd, args) =>
+  new Promise((resolve, reject) => {
+    const p = spawn(cmd, args);
+    let o = "";
+    p.stdout.on("data", (d) => (o += d));
+    p.on("close", (code) => (code === 0 ? resolve(o.trim()) : reject(new Error(`${cmd} exit ${code}`))));
+  });
+
+// Если видео не H.264 — перекодируем, иначе на части телефонов будет чёрный экран.
+async function ensureH264(file, dir) {
+  const codec = await out("ffprobe", [
+    "-v", "error", "-select_streams", "v:0",
+    "-show_entries", "stream=codec_name", "-of", "csv=p=0", file,
+  ]);
+  if (codec === "h264") return file;
+  console.log("recoding from", codec);
+  const fixed = path.join(dir, "fixed.mp4");
+  await run("ffmpeg", [
+    "-y", "-i", file,
+    "-vf", "scale='min(1280,iw)':-2",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-movflags", "+faststart", fixed,
+  ]);
+  return fixed;
+}
+
 async function download({ chat_id, message_id, url }) {
   const reply_parameters = { message_id };
   const dir = await mkdtemp(path.join(tmpdir(), "dl-"));
@@ -34,7 +60,9 @@ async function download({ chat_id, message_id, url }) {
     await run("yt-dlp", [
       "--no-playlist",
       "--max-filesize", `${MAX_MB}M`,
-      "-f", `bv*[filesize<${MAX_MB}M]+ba/b[filesize<${MAX_MB}M]/b`,
+      // H.264 + AAC: AV1/VP9 на части устройств Telegram показывает чёрный экран
+      "-f", `bv*[vcodec^=avc1][height<=720]+ba[acodec^=mp4a]/b[vcodec^=avc1][height<=720]/bv*[height<=720]+ba/b`,
+      "--postprocessor-args", "ffmpeg:-movflags +faststart",
       "--merge-output-format", "mp4",
       "-o", path.join(dir, "video.%(ext)s"),
       url,
@@ -42,7 +70,8 @@ async function download({ chat_id, message_id, url }) {
     const files = await readdir(dir);
     const name = files.find((f) => f.endsWith(".mp4")) ?? files[0];
     if (!name) throw new Error("файла нет (слишком большой?)");
-    const file = path.join(dir, name);
+    let file = path.join(dir, name);
+    file = await ensureH264(file, dir);
     if ((await stat(file)).size > MAX_MB * 1024 * 1024) throw new Error("файл больше 50 МБ");
 
     const form = new FormData();
