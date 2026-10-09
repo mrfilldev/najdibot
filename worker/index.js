@@ -273,6 +273,17 @@ export default {
       await reply(env, msg, BOT_ROASTS[Math.floor(Math.random() * BOT_ROASTS.length)]);
       return new Response("ok");
     }
+    // Человек ответил чужому боту: бот-автор виден в reply_to_message, ругаемся прямо под его сообщением.
+    const target = msg?.reply_to_message;
+    const ownId = Number(env.BOT_TOKEN.split(":")[0]);
+    if (target?.from?.is_bot && target.from.id !== ownId && shouldRoast(msg.chat.id, target.from.id)) {
+      await tg(env, "sendMessage", {
+        chat_id: msg.chat.id,
+        reply_parameters: { message_id: target.message_id },
+        text: BOT_ROASTS[Math.floor(Math.random() * BOT_ROASTS.length)],
+      });
+      return new Response("ok");
+    }
     // «сыграйбля <название или ссылка>» — присылаем трек аудиофайлом.
     const play = text && text.match(PLAY);
     if (play) {
