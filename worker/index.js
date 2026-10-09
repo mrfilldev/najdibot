@@ -414,8 +414,11 @@ export default {
       // Команды чату («@najdibot доебись до …», вопросы, казино, погода): inline-поиск по магазинам не показываем.
       const commandLike = POKE_RE.test(raw) || POKE_STOP.test(raw) || /^(?:до|при)ебись/i.test(raw) || /^(?:отстань|отвали|хватит|слезь)(?![а-яё])/i.test(raw) || /\?\s*$/.test(raw) ||
         /^(?:сыграйбля|депни|деп\S*\s+(?:в\s+)?каз)/i.test(raw) || /погод\S*\s+(?:сейчас\s+|щас\s+|сегодня\s+)?(?:в|во)\s+/i.test(raw);
+      // Пока слово набирается и похоже на начало команды («до», «доеб», «сыгр»…), поиск тоже не показываем.
+      const first = raw.toLowerCase();
+      const cmdPrefix = raw.length > 0 && !/\s/.test(raw) && ["доебись", "приебись", "отстань", "отвали", "хватит", "слезь", "сыграйбля", "депни"].some((w) => w.startsWith(first));
       let results;
-      if (commandLike && !c) {
+      if ((commandLike || cmdPrefix) && !c) {
         results = [];
       } else if (c) {
         const [lat, lng, name, note] = placeFor(c[1].trim());
@@ -427,14 +430,14 @@ export default {
         results = query.length < 2 ? [] : buildResults(query, t ? t.cats : CATEGORIES);
       }
       // Служебное: inline_query с id "dbg" возвращает результат в HTTP-ответе (проверка без Telegram).
-      if (inline.id === "dbg") return Response.json({ raw, commandLike, coords: !!c, results: results.length });
+      if (inline.id === "dbg") return Response.json({ raw, commandLike, cmdPrefix, coords: !!c, results: results.length });
       await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/answerInlineQuery`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           inline_query_id: inline.id,
           results,
-          cache_time: results.length ? 300 : 1,
+          cache_time: results.length ? 30 : 1,
         }),
       });
     }
