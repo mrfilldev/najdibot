@@ -6,10 +6,11 @@ const MEME_SUBS = ["memes", "dankmemes", "ProgrammerHumor", "me_irl", "wholesome
 
 const CHANCE = 0.1; // «средне»: примерно каждое 10-е сообщение
 const COOLDOWN = 60_000; // между самопроизвольными вбросами в одном чате
-const COOLDOWN_FORCED = 5_000; // когда обратились напрямую
+const COOLDOWN_FORCED = 1_500; // когда обратились напрямую
 const CONTEXT = 40; // сколько последних сообщений видит модель
 const KEEP = 300; // сколько храним на чат
 const lastTalk = new Map();
+const FALLBACKS = ["Завис, спроси ещё раз.", "Чё-то я туплю, повтори.", "Не расслышал, давай заново.", "Секунду, мозги перезагружаются. Повтори."];
 
 const SYSTEM = `Ты — Найдибот, участник дружеского Telegram-чата (14 человек). Характер: саркастичный, остроумный, любишь чёрный юмор и мат, но без перегибов. Пиши коротко (1-2 фразы), по-русски, как живой человек в чате, без вступлений, без «как ИИ». Не повторяйся и не лезь без повода. Если на фото люди — не оценивай их внешность, тело и «горячесть», отшутись по-другому или оцени саму ситуацию и подпись. Никаких оскорблений по национальности, полу, вере, здоровью, сексуальной ориентации и подобному. Если переписка скучная или тебе нечего добавить — молчи.
 
@@ -67,7 +68,7 @@ export async function decide(env, rows, forced, replied = null) {
       model: env.LLM_MODEL,
       max_tokens: 400,
       messages: [
-        { role: "system", content: SYSTEM },
+        { role: "system", content: forced ? `${SYSTEM}\n\nСейчас разрешено только действие text: {"action":"text","text":"реплика"}.` : SYSTEM },
         { role: "user", content },
       ],
     }),
@@ -117,7 +118,11 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
       text: (rep.text || rep.caption || "").slice(0, 500),
       image: rep.photo ? await photoDataUrl(env, rep.photo) : null,
     };
-    const d = await decide(env, await history(env, chatId), forced, replied);
+    const rows = await history(env, chatId);
+    let d = await decide(env, rows, forced, replied).catch((e) => (console.error("decide", e.message), null));
+    // На прямое обращение молчать нельзя: один повтор, потом запасная фраза.
+    if (forced && d?.action !== "text") d = await decide(env, rows, forced, replied).catch(() => null);
+    if (forced && d?.action !== "text") d = { action: "text", text: pick(FALLBACKS) };
     if (!d || d.action === "skip") return false;
 
     if (d.action === "reaction" && REACTIONS.includes(d.emoji)) {
@@ -143,6 +148,10 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
     }
   } catch (e) {
     console.error("chat failed:", e.message);
+    if (forced) {
+      await tg("sendMessage", { chat_id: chatId, text: pick(FALLBACKS), reply_parameters: { message_id: msg.message_id } }).catch(() => {});
+      return true;
+    }
   }
   return false;
 }
