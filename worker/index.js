@@ -1,24 +1,49 @@
 // Inline-бот: на @najdibot <запрос> отдаёт ссылки поиска по площадкам.
 // Telegram шлёт сюда апдейты вебхуком, мы отвечаем вызовом answerInlineQuery.
 
-const PLATFORMS = [
-  ["Ozon", "https://www.ozon.ru/search/?text="],
-  ["Wildberries", "https://www.wildberries.ru/catalog/0/search.aspx?search="],
-  ["Яндекс Маркет", "https://market.yandex.ru/search?text="],
-  ["DNS", "https://www.dns-shop.ru/search/?q="],
-  ["Авито", "https://www.avito.ru/rossiya?q="],
-  ["Мегамаркет", "https://megamarket.ru/catalog/?q="],
-  ["AliExpress", "https://aliexpress.ru/wholesale?SearchText="],
-  ["М.Видео", "https://www.mvideo.ru/product-list-page?q="],
-  ["Эльдорадо", "https://www.eldorado.ru/search/catalog.php?q="],
-  ["Ситилинк", "https://www.citilink.ru/search/?text="],
-  ["Lamoda", "https://www.lamoda.ru/catalog/?q="],
-  ["Спортмастер", "https://www.sportmaster.ru/catalog/?q="],
-  ["Леруа Мерлен", "https://leroymerlin.ru/search/?q="],
-  ["ВсеИнструменты", "https://www.vseinstrumenti.ru/search_main.php?what="],
-  ["Детский мир", "https://www.detmir.ru/search/results/?searchTerm="],
-  ["Золотое Яблоко", "https://goldapple.ru/catalogsearch/result/?q="],
+// Шаблон: часть до запроса или функция. «yd» = поиск Яндекса по сайту,
+// когда нет проверенной ссылки на внутренний поиск.
+const yd = (site) => "https://yandex.ru/search/?text=site%3A" + site + "+";
+
+const CATEGORIES = [
+  ["Маркетплейсы", [
+    ["Ozon", "https://www.ozon.ru/search/?text="],
+    ["Wildberries", "https://www.wildberries.ru/catalog/0/search.aspx?search="],
+    ["Яндекс Маркет", "https://market.yandex.ru/search?text="],
+    ["Мегамаркет", "https://megamarket.ru/catalog/?q="],
+    ["AliExpress", "https://aliexpress.ru/wholesale?SearchText="],
+    ["Авито", "https://www.avito.ru/rossiya?q="],
+  ]],
+  ["Электроника", [
+    ["DNS", "https://www.dns-shop.ru/search/?q="],
+    ["М.Видео", "https://www.mvideo.ru/product-list-page?q="],
+    ["Эльдорадо", "https://www.eldorado.ru/search/catalog.php?q="],
+    ["Ситилинк", "https://www.citilink.ru/search/?text="],
+  ]],
+  ["Одежда, красота, дети", [
+    ["Lamoda", "https://www.lamoda.ru/catalog/?q="],
+    ["Золотое Яблоко", "https://goldapple.ru/catalogsearch/result/?q="],
+    ["Спортмастер", "https://www.sportmaster.ru/catalog/?q="],
+    ["Детский мир", "https://www.detmir.ru/search/results/?searchTerm="],
+  ]],
+  ["Дом и ремонт", [
+    ["Леруа Мерлен", "https://leroymerlin.ru/search/?q="],
+    ["ВсеИнструменты", "https://www.vseinstrumenti.ru/search_main.php?what="],
+  ]],
+  ["Авто", [
+    ["Авторусь", yd("autorus.ru")],
+    ["Шинсервис", yd("shinservice.ru")],
+    ["Exist", "https://www.exist.ru/Price/?pcode="],
+    ["Autodoc", "https://www.autodoc.ru/search?q="],
+    ["Autopiter", "https://autopiter.ru/goods/"],
+    ["Emex", "https://emex.ru/products/"],
+    ["Авито Авто", "https://www.avito.ru/rossiya/avtomobili?q="],
+    ["Auto.ru", yd("auto.ru")],
+    ["Drom", yd("drom.ru")],
+  ]],
 ];
+
+const PLATFORMS = CATEGORIES.flatMap(([cat, items]) => items.map(([n, u]) => [n, u, cat]));
 
 const esc = (s) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -53,16 +78,18 @@ const JOKES = [
 
 function linksText(query) {
   const q = encodeURIComponent(query).replace(/%20/g, "+");
-  return PLATFORMS.map(([name, base]) => `<a href="${esc(base + q)}">${name}</a>`).join(" · ");
+  return CATEGORIES.map(([cat, items]) =>
+    `<b>${cat}:</b> ` + items.map(([name, base]) => `<a href="${esc(base + q)}">${name}</a>`).join(" · ")
+  ).join("\n");
 }
 
 function buildResults(query) {
   const q = encodeURIComponent(query).replace(/%20/g, "+");
-  return PLATFORMS.map(([name, base], i) => ({
+  return PLATFORMS.map(([name, base, cat], i) => ({
     type: "article",
     id: String(i),
     title: name,
-    description: `Искать «${query}»`,
+    description: `${cat}: «${query}»`,
     input_message_content: {
       message_text: `<a href="${esc(base + q)}">${name}: ${esc(query)}</a>`,
       parse_mode: "HTML",
