@@ -266,6 +266,29 @@ function shouldBark(chatId) {
   return true;
 }
 
+const HELP = [
+  "<b>Что я умею</b>",
+  "",
+  "<b>Поиск товаров (25 площадок РФ по категориям)</b>",
+  "<code>найдибля айфон 15</code> — ссылки на Ozon, WB, Маркет, DNS, Авито, авто-магазины и др.",
+  "<code>найди iphone 15</code> — глобальный поиск: Google, Amazon, eBay, AliExpress, Temu, Etsy",
+  "<code>@najdibot запрос</code> — то же в любом чате через inline (с «найди» — мир)",
+  "",
+  "<b>Видео</b>",
+  "Кинь ссылку YouTube / Shorts / TikTok / Instagram Reels — пришлю видео (до 50 МБ)",
+  "",
+  "<b>Музыка</b>",
+  "<code>сыграйбля название трека</code> или ссылка — пришлю mp3 (до 15 минут)",
+  "",
+  "<b>Развлечения</b>",
+  "<code>найдибля координаты очко Кирилла</code> — место на карте со стёбом",
+  "Матерный запрос — получишь шутку вместо ссылок",
+  "Ответь на сообщение чужого бота — я его обматерю (нейросеть)",
+  "В группах иногда лаю: ГАВ",
+  "",
+  "<i>В личке пиши запрос без триггера.</i>",
+].join("\n");
+
 const PLAY = /^сыграйбля[\s,:;!.-]+(.{2,})$/is;
 const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
 
@@ -308,9 +331,8 @@ export default {
     const msg = update.message;
     const text = msg?.text?.trim();
     const isPrivate = msg?.chat.type === "private";
-    if (isPrivate && text && /^\/(start|help)\b/i.test(text)) {
-      await reply(env, msg, "Пиши, что искать, и я дам ссылки на Ozon, Wildberries, Маркет, DNS и Авито.\n" +
-        "В любом чате работает и так: <code>@najdibot запрос</code>. Кинь ссылку YouTube/TikTok/Instagram — пришлю видео. <code>сыграйбля трек</code> — пришлю музыку. В группах: <code>найдибля запрос</code> (РФ) или <code>найди запрос</code> (весь мир).");
+    if (text && /^\/(start|help)(@\w+)?\b/i.test(text)) {
+      await reply(env, msg, HELP);
       return new Response("ok");
     }
     // В личке любой текст — запрос РФ (или «найди …» — мир), в группах нужен триггер.
