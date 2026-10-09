@@ -193,3 +193,38 @@ export async function digestFromRows(env, rows, hours = 12) {
   const text = (await r.json()).choices?.[0]?.message?.content?.trim();
   return text ? `📰 Сводка за ${hours} ч\n\n${text.slice(0, 1500)}` : null;
 }
+
+// ---- Казино: фразы от LLM ----
+const SYMBOLS = ["BAR", "виноград", "лимон", "семёрка"];
+// Значение 🎰 (1-64): три барабана по основанию 4, символы: BAR, виноград, лимон, семёрка.
+export function reels(v) {
+  const x = v - 1;
+  return [x % 4, Math.floor(x / 4) % 4, Math.floor(x / 16) % 4].map((i) => SYMBOLS[i]);
+}
+
+const CASINO_SYSTEM = `Ты — Найдибот, саркастичный участник дружеского Telegram-чата. Пишешь одну короткую реплику (1-2 предложения, до 220 символов) по-русски, с матом и стёбом, как живой человек. Без вступлений и кавычек, только сама реплика. Никаких оскорблений по национальности, полу, вере, здоровью и подобному.`;
+
+// win=false: горюешь о проигрыше игрока; win=true: игрок сорвал джекпот, и ты оскорбляешь другого участника ({who}).
+export async function casinoLine(env, { win, player, reelNames, target, targetMsgs }) {
+  if (!env.OPENROUTER_API_KEY) return null;
+  const spin = `Барабаны: ${reelNames.join(", ")}.`;
+  const task = win
+    ? `${player} крутил игровой автомат и сорвал ДЖЕКПОТ (${spin}). Порадуйся, но главное: остроумно оскорби другого участника чата по имени {who} (так и пиши: {who}, это подставится имя с тегом). ${targetMsgs?.length ? `Что он недавно писал в чате: ${targetMsgs.map((m) => `«${String(m).slice(0, 120)}»`).join("; ")}.` : ""}`
+    : `${player} крутил игровой автомат и проиграл (${spin}). Погорюй об этом матом, можешь подколоть игрока по имени и пошутить про то, какие символы выпали.`;
+  try {
+    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
+      signal: AbortSignal.timeout(15_000),
+      body: JSON.stringify({
+        model: env.LLM_MODEL, max_tokens: 200, temperature: 1.0,
+        messages: [{ role: "system", content: CASINO_SYSTEM }, { role: "user", content: task }],
+      }),
+    });
+    const text = (await r.json()).choices?.[0]?.message?.content?.trim();
+    return text ? text.slice(0, 400) : null;
+  } catch (e) {
+    console.error("casino llm failed:", e.message);
+    return null;
+  }
+}

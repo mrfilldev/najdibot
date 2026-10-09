@@ -1,5 +1,5 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
-import { digest, forget, maybeChat, remember } from "./chat.js";
+import { casinoLine, digest, forget, maybeChat, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -490,19 +490,32 @@ export default {
         })).json();
         const v = r.result?.dice?.value;
         if (!v) return;
-        await sleep(3500); // дать барабанам остановиться, иначе спойлер
-        if (!JACKPOTS.has(v)) {
-          await tg(env, "sendMessage", { chat_id: msg.chat.id, text: CASINO_LOSS[Math.floor(Math.random() * CASINO_LOSS.length)] });
+        const win = JACKPOTS.has(v);
+        const player = msg.from?.first_name || "игрок";
+        // выигрыш: случайный участник чата (кто писал), тег через tg://user работает и без username
+        let target = null, targetMsgs = [];
+        if (win) {
+          target = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id!=0 GROUP BY user_id ORDER BY RANDOM() LIMIT 1")
+            .bind(msg.chat.id).first().catch(() => null);
+          if (target) {
+            const { results } = await env.DB.prepare("SELECT text FROM messages WHERE chat_id=? AND user_id=? ORDER BY id DESC LIMIT 3")
+              .bind(msg.chat.id, target.user_id).all().catch(() => ({ results: [] }));
+            targetMsgs = results.map((x) => x.text);
+          }
+        }
+        // фразу готовим, пока крутятся барабаны (иначе спойлер)
+        const [line] = await Promise.all([
+          casinoLine(env, { win, player, reelNames: reels(v), target: target?.name, targetMsgs }),
+          sleep(3500),
+        ]);
+        if (!win) {
+          await tg(env, "sendMessage", { chat_id: msg.chat.id, text: line ?? CASINO_LOSS[Math.floor(Math.random() * CASINO_LOSS.length)] });
           return;
         }
-        // выигрыш: случайный участник чата (кто писал), тег через tg://user — работает и без username
-        const row = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id!=0 GROUP BY user_id ORDER BY RANDOM() LIMIT 1")
-          .bind(msg.chat.id).first().catch(() => null);
-        const who = row ? `<a href="tg://user?id=${row.user_id}">${esc(row.name)}</a>` : "все остальные";
-        await tg(env, "sendMessage", {
-          chat_id: msg.chat.id, parse_mode: "HTML",
-          text: CASINO_WIN[Math.floor(Math.random() * CASINO_WIN.length)].replace("{who}", who),
-        });
+        const who = target ? `<a href="tg://user?id=${target.user_id}">${esc(target.name)}</a>` : "все остальные";
+        const tpl = line ?? CASINO_WIN[Math.floor(Math.random() * CASINO_WIN.length)];
+        const body = tpl.includes("{who}") ? tpl.split("{who}").map(esc).join(who) : `${who}, ${esc(tpl)}`;
+        await tg(env, "sendMessage", { chat_id: msg.chat.id, parse_mode: "HTML", text: body });
       })());
       return new Response("ok");
     }
