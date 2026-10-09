@@ -1,4 +1,5 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
+import { forget, maybeChat, remember } from "./chat.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
 // Inline-бот: на @najdibot <запрос> отдаёт ссылки поиска по площадкам.
@@ -286,6 +287,7 @@ const HELP = [
   "Матерный запрос — получишь шутку вместо ссылок",
   "Ответь на сообщение чужого бота — я его обматерю (нейросеть)",
   "В группах иногда лаю: ГАВ",
+  "В группах читаю чат, сам иногда вставляю слово, реакцию или мем с Reddit. Позови: @najdibot. <code>/forget</code> — стереть всё, что я помню о тебе",
   "",
   "<i>В личке пиши запрос без триггера.</i>",
 ].join("\n");
@@ -345,6 +347,16 @@ export default {
     const msg = update.message;
     const text = msg?.text?.trim();
     const isPrivate = msg?.chat.type === "private";
+    const isGroup = msg && !isPrivate && msg.chat.type !== "channel";
+    if (isGroup && text && /^\/forget(@\w+)?\b/i.test(text)) {
+      const n = await forget(env, msg.chat.id, msg.from.id);
+      await reply(env, msg, `Забыл всё, что ты писал(а) здесь: ${n} сообщ.`);
+      return new Response("ok");
+    }
+    // Запоминаем текст группы для контекста (команды и сообщения ботов не храним).
+    if (isGroup && text && !text.startsWith("/") && !msg.from?.is_bot) {
+      await remember(env, msg.chat.id, msg.from.id, msg.from.first_name || msg.from.username || "аноним", text, msg.message_id).catch((e) => console.error("remember", e.message));
+    }
     if (text && /^\/(start|help)(@\w+)?\b/i.test(text)) {
       await reply(env, msg, HELP);
       return new Response("ok");
@@ -413,9 +425,16 @@ export default {
         ? JOKES[Math.floor(Math.random() * JOKES.length)]
         : `Ищу «${esc(t.query)}»:\n${linksText(t.query, t.cats)}`);
     }
-    // Ни один триггер не сработал: иногда просто лаем.
-    if (text && !isPrivate && !text.startsWith("/") && shouldBark(msg.chat.id)) {
-      await reply(env, msg, BARKS[Math.floor(Math.random() * BARKS.length)]);
+    // Ни один триггер не сработал: участвуем в беседе (если обратились — всегда), иначе иногда лаем.
+    if (text && !isPrivate && !text.startsWith("/")) {
+      const ownUsername = /@najdibot\b/i.test(text);
+      const toUs = msg.reply_to_message?.from?.id === ownId;
+      if (await maybeChat(env, msg, (m, b) => tg(env, m, b), { forced: ownUsername || toUs })) {
+        return new Response("ok");
+      }
+      if (shouldBark(msg.chat.id)) {
+        await reply(env, msg, BARKS[Math.floor(Math.random() * BARKS.length)]);
+      }
     }
     return new Response("ok");
   },

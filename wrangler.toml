@@ -18,3 +18,8 @@ new_sqlite_classes = ["Downloader"]
 
 [vars]
 LLM_MODEL = "google/gemini-2.5-flash"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "najdibot"
+database_id = "1ca1697d-9a02-4e72-88a4-190214746e8c"
