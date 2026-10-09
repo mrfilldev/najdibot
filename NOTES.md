@@ -1,11 +1,12 @@
-# najdibot: handoff (2026-10-09, обновлено)
-- Состояние: v1 работает. Inline-бот @najdibot отдаёт ссылки поиска (Ozon, WB, Маркет, DNS, Авито, только РФ).
-- Стек: Cloudflare Worker (JS, webhook) `worker/index.js`, деплой `npx wrangler deploy`. Секреты BOT_TOKEN и WEBHOOK_SECRET лежат в Worker и в локальном `.env`.
-- Webhook ставится `./set-webhook.sh <url>`. Python-версия (aiogram, polling) в `legacy-python/`.
-- Решения: JS вместо Python, потому что Workers не умеют polling. Ссылки как HTML-якоря, без голых URL.
-- Ловушка: при дописании в `.env` проверять перевод строки в конце.
-- Банк идей (terra-incognita/ideas-bank.md): статус «в работе».
-- Открыто: v2 (цены/сравнение через Apify или свой парсер, кэш), стоит ли делать, пока не попользовались.
-- Добавлено после v1: триггер «найдибля <запрос>» в группах (Group Privacy выключена), личка (любой текст = запрос, /start), стёб на мат (JOKES), 25 площадок по 5 категориям (в т.ч. Авто).
-- Слабые места: у Авторуси, Шинсервиса, Auto.ru, Drom ссылка = поиск Яндекса по сайту (нет проверенного внутреннего поиска); Леруа Мерлен не проверен.
-- Идеи дальше: фильтр категорий по запросу (не слать авто к «айфон»), кнопка «ещё», v2 с ценами.
+# najdibot: handoff (2026-10-09, конец сессии)
+
+**Состояние.** @najdibot работает на Cloudflare: Worker (`worker/index.js`, `worker/chat.js`) + Container с yt-dlp/ffmpeg (`container/`) + D1 (память чата). Деплой: `DOCKER_CONTEXT=desktop-linux npx wrangler deploy`. После деплоя живой контейнер остаётся на старом коде: `POST /restart` с `X-Telegram-Bot-Api-Secret-Token`. Полный список навыков: `README.md`, `/help`.
+
+**Решения и грабли.**
+- yt-dlp: сначала анонимно, потом с cookies (`runYt`), нужен `--js-runtimes node`. С cookies с IP Cloudflare YouTube даёт 403. Ролики 18+ пока не скачиваются.
+- Секреты в Worker: BOT_TOKEN, WEBHOOK_SECRET, OPENROUTER_API_KEY, YT_COOKIES_GZB64. Локально в `.env` (не в git). Дописывая в `.env`, проверять перевод строки.
+- Озвучка OpenAI (`gpt-audio-mini`) мат пропускает. Для мата нужен Silero (локально). Рецепт голоса №3: `docs/voice-recipe.md`, `tools/voice/`. В бота НЕ подключён.
+- Cron сводки: 15:00 и 21:00 UTC (18:00 и 00:00 МСК), `/сводка` по запросу.
+- Групповая память: 300 сообщений на чат, `/forget` стирает свои. Чат об этом предупреждён автором.
+
+**Открыто.** Модерация (бот не админ, нет /mute /ban /warn, проверки админа), приветствие и капча новичкам, настройки по чату (шансы и функции зашиты в код), подключение голоса Silero к боту, ролики 18+.
