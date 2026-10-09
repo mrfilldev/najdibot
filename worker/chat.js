@@ -146,7 +146,7 @@ async function complete(env, messages, { tools = false, maxTokens = 400 } = {}) 
   return "";
 }
 
-export async function decide(env, rows, forced, replied = null, extra = "") {
+export async function decide(env, rows, forced, replied = null, extra = "", asker = null) {
   // Ответ на конкретное сообщение: переписку берём только как короткий фон, чтобы бот не смешивал чужие реплики
   const focused = forced && !!replied;
   const log = (focused ? rows.slice(-6) : rows).map((r) => `${r.name}: ${r.text}`).join("\n");
@@ -154,8 +154,11 @@ export async function decide(env, rows, forced, replied = null, extra = "") {
     ? `К тебе обратились напрямую (последнее сообщение адресовано тебе): ответь действием text, по делу и в своём стиле. Молчать нельзя.${focused ? " Отвечай ТОЛЬКО на сообщение, на которое ответили (оно выше), и на фразу человека, который тебя позвал. Остальные реплики чата это лишь фон: не отвечай им, не обращайся к другим людям и не смешивай их слова с этим сообщением." : ""}`
     : "Решай сам: вставить слово, поставить реакцию, прислать мем или промолчать.";
   let userText = `Последние сообщения чата (старые сверху):\n${log}\n\n`;
+  if (forced && asker) {
+    userText += `Тебя позвал участник «${asker.name}» (это твой собеседник, отвечай ему). Его фраза: «${asker.text || "(без текста)"}».\n`;
+  }
   if (replied) {
-    userText += `Последнее сообщение — ответ на это сообщение (вот о чём речь):\n${replied.name}: ${replied.text || "(без текста)"}${replied.image ? " [к сообщению приложено фото, оно ниже]" : ""}\n\n`;
+    userText += `${asker ? `Он ответил на сообщение другого или того же участника, автор того сообщения: «${replied.name}»` : "Последнее сообщение — ответ на это сообщение"} (вот о чём речь):\n${replied.name}: ${replied.text || "(без текста)"}${replied.image ? " [к сообщению приложено фото, оно ниже]" : ""}\n\n`;
   }
   if (extra) userText += `Содержимое ссылок из этих сообщений (ты уже открыл их):\n${extra}\n\n`;
   userText += task;
@@ -164,7 +167,7 @@ export async function decide(env, rows, forced, replied = null, extra = "") {
     : userText;
   const tools = forced && env.OPENROUTER_API_KEY;
   const system = forced
-    ? `${SYSTEM}\n\nСейчас разрешено только действие text: {"action":"text","text":"реплика"}. Правило про «1-2 фразы» тут НЕ действует: на прямое обращение отвечай развёрнуто, 3-6 предложений (до 900 символов). Если обращаются ответом на сообщение (новость, пост, фото, ссылка), разбери его по существу: назови 1-2 конкретных пункта оттуда, выскажи свою позицию, обыграй мемом или чёрным юмором и закончи подколкой или встречным вопросом. Не ограничивайся общими шутками про заголовок. Отвечай с матом.\nУ тебя есть инструменты: web_search (поиск в интернете) и open_url (прочитать страницу). Если вопрос про цены, новости, характеристики, даты или любые факты, которые ты не знаешь точно, СНАЧАЛА вызови web_search и опирайся на найденные цифры, не выдумывай их. Итоговый ответ всегда в JSON {"action":"text","text":"…"}.`
+    ? `${SYSTEM}\n\nСейчас разрешено только действие text: {"action":"text","text":"реплика"}. Правило про «1-2 фразы» тут НЕ действует: на прямое обращение отвечай развёрнуто, 3-6 предложений (до 900 символов). Если обращаются ответом на сообщение (новость, пост, фото, ссылка), разбери его по существу: назови 1-2 конкретных пункта оттуда, выскажи свою позицию, обыграй мемом или чёрным юмором и закончи подколкой или встречным вопросом. Не ограничивайся общими шутками про заголовок. Отвечай с матом.\nНе путай авторов: отвечай тому, кто тебя позвал (он указан в запросе), а автор сообщения, на которое он ответил, это другой человек (или он сам), и слова из того сообщения принадлежат ему, а не собеседнику. Имена Санни, Sunny, Саныч, Саня, Сань, Санёк, найдибот — это ТВОИ имена: никогда не называй ими собеседника. Не придумывай «тут пишут» и не ссылайся на неизвестные источники: поиском пользуйся только для настоящих фактов (цены, новости, характеристики), а не для шуток про людей из чата.\nУ тебя есть инструменты: web_search (поиск в интернете) и open_url (прочитать страницу). Если вопрос про цены, новости, характеристики, даты или любые факты, которые ты не знаешь точно, СНАЧАЛА вызови web_search и опирайся на найденные цифры, не выдумывай их. Итоговый ответ всегда в JSON {"action":"text","text":"…"}.`
     : SYSTEM;
   const out = await complete(env, [{ role: "system", content: system }, { role: "user", content }], { tools, maxTokens: forced ? 1100 : 400 });
   const m = out.match(/\{[\s\S]*\}/);
@@ -219,9 +222,10 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
     // ссылки из сообщения и из того, на которое ответили: открываем сразу (до двух), чтобы бот видел страницу, а не только адрес
     const urls = [...new Set([...(msg.text || "").matchAll(URL_RE), ...((rep?.text || rep?.caption || "").matchAll(URL_RE))].map((m) => m[0]))].slice(0, 2);
     const extra = forced && urls.length ? (await Promise.all(urls.map(async (u) => `[${u}]\n${await openUrl(u)}`))).join("\n\n").slice(0, 9000) : "";
-    let d = await decide(env, rows, forced, replied, extra).catch((e) => (console.error("decide", e.message), null));
+    const asker = forced ? { name: msg.from?.first_name || msg.from?.username || "собеседник", text: (msg.text || msg.caption || "").slice(0, 700) } : null;
+    let d = await decide(env, rows, forced, replied, extra, asker).catch((e) => (console.error("decide", e.message), null));
     // На прямое обращение молчать нельзя: один повтор, потом запасная фраза.
-    if (forced && d?.action !== "text") d = await decide(env, rows, forced, replied, extra).catch(() => null);
+    if (forced && d?.action !== "text") d = await decide(env, rows, forced, replied, extra, asker).catch(() => null);
     if (forced && d?.action !== "text") d = { action: "text", text: pick(FALLBACKS) };
     if (!d || d.action === "skip") return false;
 
