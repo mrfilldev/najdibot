@@ -353,9 +353,12 @@ export default {
       await reply(env, msg, `Забыл всё, что ты писал(а) здесь: ${n} сообщ.`);
       return new Response("ok");
     }
-    // Запоминаем текст группы для контекста (команды и сообщения ботов не храним).
-    if (isGroup && text && !text.startsWith("/") && !msg.from?.is_bot) {
-      await remember(env, msg.chat.id, msg.from.id, msg.from.first_name || msg.from.username || "аноним", text, msg.message_id).catch((e) => console.error("remember", e.message));
+    // Запоминаем текст и подписи к фото группы для контекста (команды и сообщения ботов не храним).
+    const saved = (msg?.text || msg?.caption || (msg?.photo ? "[фото]" : "")).trim();
+    if (isGroup && saved && !saved.startsWith("/") && !msg.from?.is_bot) {
+      await remember(env, msg.chat.id, msg.from.id, msg.from.first_name || msg.from.username || "аноним",
+        msg.photo && (msg.caption || "").trim() ? `[фото] ${msg.caption}` : saved, msg.message_id,
+      ).catch((e) => console.error("remember", e.message));
     }
     if (text && /^\/(start|help)(@\w+)?\b/i.test(text)) {
       await reply(env, msg, HELP);

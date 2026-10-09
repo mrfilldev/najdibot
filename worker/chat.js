@@ -11,7 +11,7 @@ const CONTEXT = 40; // сколько последних сообщений ви
 const KEEP = 300; // сколько храним на чат
 const lastTalk = new Map();
 
-const SYSTEM = `Ты — Найдибот, участник дружеского Telegram-чата (14 человек). Характер: саркастичный, остроумный, любишь чёрный юмор и мат, но без перегибов. Пиши коротко (1-2 фразы), по-русски, как живой человек в чате, без вступлений, без «как ИИ». Не повторяйся и не лезь без повода. Никаких оскорблений по национальности, полу, вере, здоровью, сексуальной ориентации и подобному. Если переписка скучная или тебе нечего добавить — молчи.
+const SYSTEM = `Ты — Найдибот, участник дружеского Telegram-чата (14 человек). Характер: саркастичный, остроумный, любишь чёрный юмор и мат, но без перегибов. Пиши коротко (1-2 фразы), по-русски, как живой человек в чате, без вступлений, без «как ИИ». Не повторяйся и не лезь без повода. Если на фото люди — не оценивай их внешность, тело и «горячесть», отшутись по-другому или оцени саму ситуацию и подпись. Никаких оскорблений по национальности, полу, вере, здоровью, сексуальной ориентации и подобному. Если переписка скучная или тебе нечего добавить — молчи.
 
 Ты можешь выбрать одно действие и ответить ТОЛЬКО JSON без пояснений:
 {"action":"text","text":"реплика"} — написать сообщение;
@@ -46,27 +46,51 @@ async function history(env, chatId) {
   return results.reverse();
 }
 
-export async function decide(env, rows, forced) {
+export async function decide(env, rows, forced, replied = null) {
   const log = rows.map((r) => `${r.name}: ${r.text}`).join("\n");
   const task = forced
     ? "К тебе обратились напрямую (последнее сообщение адресовано тебе): ответь действием text, по делу и в своём стиле. Молчать нельзя."
     : "Решай сам: вставить слово, поставить реакцию, прислать мем или промолчать.";
+  let userText = `Последние сообщения чата (старые сверху):\n${log}\n\n`;
+  if (replied) {
+    userText += `Последнее сообщение — ответ на это сообщение (вот о чём речь):\n${replied.name}: ${replied.text || "(без текста)"}${replied.image ? " [к сообщению приложено фото, оно ниже]" : ""}\n\n`;
+  }
+  userText += task;
+  const content = replied?.image
+    ? [{ type: "text", text: userText }, { type: "image_url", image_url: { url: replied.image } }]
+    : userText;
   const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(25_000),
     body: JSON.stringify({
       model: env.LLM_MODEL,
       max_tokens: 400,
       messages: [
         { role: "system", content: SYSTEM },
-        { role: "user", content: `Последние сообщения чата (старые сверху):\n${log}\n\n${task}` },
+        { role: "user", content },
       ],
     }),
   });
-  const content = (await r.json()).choices?.[0]?.message?.content ?? "";
-  const m = content.match(/\{[\s\S]*\}/);
+  const out = (await r.json()).choices?.[0]?.message?.content ?? "";
+  const m = out.match(/\{[\s\S]*\}/);
   return m ? JSON.parse(m[0]) : null;
+}
+
+// Фото из сообщения как data-URL (ссылку Telegram с токеном модели отдавать нельзя).
+async function photoDataUrl(env, photo) {
+  try {
+    const pick = [...photo].reverse().find((p) => (p.file_size ?? 0) < 1_500_000) ?? photo[0];
+    const f = await (await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/getFile?file_id=${pick.file_id}`)).json();
+    const bin = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${f.result.file_path}`);
+    const buf = new Uint8Array(await bin.arrayBuffer());
+    let s = "";
+    for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+    return `data:image/jpeg;base64,${btoa(s)}`;
+  } catch (e) {
+    console.error("photo failed:", e.message);
+    return null;
+  }
 }
 
 async function memeUrl(sub) {
@@ -87,7 +111,13 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
 
   try {
     if (forced) await tg("sendChatAction", { chat_id: chatId, action: "typing" });
-    const d = await decide(env, await history(env, chatId), forced);
+    const rep = msg.reply_to_message;
+    const replied = rep && {
+      name: rep.from?.first_name || rep.from?.username || "кто-то",
+      text: (rep.text || rep.caption || "").slice(0, 500),
+      image: rep.photo ? await photoDataUrl(env, rep.photo) : null,
+    };
+    const d = await decide(env, await history(env, chatId), forced, replied);
     if (!d || d.action === "skip") return false;
 
     if (d.action === "reaction" && REACTIONS.includes(d.emoji)) {
