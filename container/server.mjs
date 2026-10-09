@@ -2,7 +2,7 @@
 // Запросы приходят от Worker: POST /download {chat_id, message_id, url}.
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { openAsBlob } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -93,9 +93,53 @@ async function download({ chat_id, message_id, url }) {
   }
 }
 
+async function audio({ chat_id, message_id, query }) {
+  const dir = await mkdtemp(path.join(tmpdir(), "au-"));
+  try {
+    await tg("sendChatAction", { chat_id, action: "upload_voice" });
+    // Ссылка качается как есть, текст ищется на YouTube (первый результат).
+    const src = /^https?:\/\//i.test(query) ? query : `ytsearch1:${query}`;
+    await run("yt-dlp", [
+      "--no-playlist",
+      "--max-filesize", `${MAX_MB}M`,
+      "--match-filters", "duration<900", // не тащим часовые миксы
+      "-x", "--audio-format", "mp3", "--audio-quality", "192K",
+      "--write-info-json",
+      "-o", path.join(dir, "audio.%(ext)s"),
+      src,
+    ]);
+    const files = await readdir(dir);
+    const mp3 = files.find((f) => f.endsWith(".mp3"));
+    if (!mp3) throw new Error("mp3 нет (длиннее 15 минут или не найдено)");
+    const file = path.join(dir, mp3);
+    if ((await stat(file)).size > MAX_MB * 1024 * 1024) throw new Error("файл больше 50 МБ");
+    const info = JSON.parse(await readFile(path.join(dir, "audio.info.json"), "utf8"));
+
+    const form = new FormData();
+    form.set("chat_id", String(chat_id));
+    form.set("reply_to_message_id", String(message_id));
+    form.set("title", String(info.track || info.title || query).slice(0, 100));
+    form.set("performer", String(info.artist || info.uploader || "").slice(0, 100));
+    if (info.duration) form.set("duration", String(Math.round(info.duration)));
+    form.set("audio", await openAsBlob(file, { type: "audio/mpeg" }), `${(info.title || "track").replace(/[\\/:*?"<>|]/g, "")}.mp3`);
+    const r = await fetch(`${API}/sendAudio`, { method: "POST", body: form });
+    if (!r.ok) throw new Error(`Telegram: ${r.status} ${(await r.text()).slice(0, 200)}`);
+  } catch (e) {
+    console.error("audio failed:", e.message);
+    await tg("sendMessage", {
+      chat_id,
+      reply_parameters: { message_id },
+      text: "Не нашёл или не смог скачать трек (длиннее 15 минут, недоступен или слишком большой).",
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 http
   .createServer((req, res) => {
-    if (req.method !== "POST" || req.url !== "/download") {
+    const handler = { "/download": download, "/audio": audio }[req.url];
+    if (req.method !== "POST" || !handler) {
       res.writeHead(200).end("ok");
       return;
     }
@@ -104,7 +148,7 @@ http
     req.on("end", () => {
       // Отвечаем сразу, работаем в фоне: скачивание может идти долго.
       res.writeHead(202).end("accepted");
-      download(JSON.parse(body)).catch((e) => console.error(e));
+      handler(JSON.parse(body)).catch((e) => console.error(e));
     });
   })
   .listen(8080, () => console.log("listening on 8080"));

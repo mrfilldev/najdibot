@@ -181,6 +181,7 @@ export class Downloader extends Container {
   }
 }
 
+const PLAY = /^сыграйбля[\s,:;!.-]+(.{2,})$/is;
 const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
 
 export default {
@@ -224,13 +225,24 @@ export default {
     const isPrivate = msg?.chat.type === "private";
     if (isPrivate && text && /^\/(start|help)\b/i.test(text)) {
       await reply(env, msg, "Пиши, что искать, и я дам ссылки на Ozon, Wildberries, Маркет, DNS и Авито.\n" +
-        "В любом чате работает и так: <code>@najdibot запрос</code>. В группах: <code>найдибля запрос</code> (РФ) или <code>найди запрос</code> (весь мир).");
+        "В любом чате работает и так: <code>@najdibot запрос</code>. Кинь ссылку YouTube/TikTok/Instagram — пришлю видео. <code>сыграйбля трек</code> — пришлю музыку. В группах: <code>найдибля запрос</code> (РФ) или <code>найди запрос</code> (весь мир).");
       return new Response("ok");
     }
     // В личке любой текст — запрос РФ (или «найди …» — мир), в группах нужен триггер.
     const t = text && !text.startsWith("/")
       ? (parseTrigger(text) || (isPrivate ? { cats: CATEGORIES, query: text } : null))
       : null;
+    // «сыграйбля <название или ссылка>» — присылаем трек аудиофайлом.
+    const play = text && text.match(PLAY);
+    if (play) {
+      ctx.waitUntil(
+        getContainer(env.DOWNLOADER).fetch("http://container/audio", {
+          method: "POST",
+          body: JSON.stringify({ chat_id: msg.chat.id, message_id: msg.message_id, query: play[1].trim() }),
+        }),
+      );
+      return new Response("ok");
+    }
     // Ссылка на YouTube/TikTok в любом сообщении — скачиваем видео.
     const link = text && text.match(VIDEO_URL);
     if (link) {
