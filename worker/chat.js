@@ -56,7 +56,97 @@ async function history(env, chatId) {
   return results.reverse();
 }
 
-export async function decide(env, rows, forced, replied = null) {
+// ---- Инструменты бота: поиск в интернете и чтение страниц ----
+const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description: "Поиск в интернете: актуальные факты, цены, новости, характеристики, всё, что нельзя знать наверняка. Возвращает выжимку с источниками.",
+      parameters: { type: "object", properties: { query: { type: "string", description: "поисковый запрос, лучше конкретный" } }, required: ["query"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "open_url",
+      description: "Прочитать текст страницы по ссылке.",
+      parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
+    },
+  },
+];
+
+const URL_RE = /https?:\/\/[^\s<>"')]+/gi;
+
+// Текст страницы через Jina Reader (бесплатно, без ключа). Прямые запросы с IP Cloudflare часто режутся магазинами.
+export async function openUrl(url) {
+  if (!/^https?:\/\//i.test(url)) return "Нужна ссылка http(s).";
+  try {
+    const r = await fetch(`https://r.jina.ai/${url}`, { headers: { accept: "text/plain" }, signal: AbortSignal.timeout(15_000) });
+    const t = (await r.text()).replace(/\n{3,}/g, "\n\n").trim();
+    return t ? t.slice(0, 6000) : "Страница пустая или закрыта от ботов.";
+  } catch (e) {
+    return `Не открылась: ${e.message}`;
+  }
+}
+
+// Поиск через плагин web у OpenRouter: отдельный вызов модели, который сам гуглит и возвращает краткий ответ.
+async function webSearch(env, query) {
+  try {
+    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
+      signal: AbortSignal.timeout(30_000),
+      body: JSON.stringify({
+        model: env.LLM_MODEL,
+        max_tokens: 700,
+        plugins: [{ id: "web", max_results: 4 }],
+        messages: [
+          { role: "system", content: "Ты поисковый помощник. Найди в интернете ответ на запрос и перечисли главное кратко и конкретно (цифры, цены, даты, названия), без воды, до 1200 символов. В конце укажи домены источников." },
+          { role: "user", content: query },
+        ],
+      }),
+    });
+    const text = (await r.json()).choices?.[0]?.message?.content?.trim();
+    return text ? text.slice(0, 2500) : "Ничего не нашлось.";
+  } catch (e) {
+    return `Поиск не удался: ${e.message}`;
+  }
+}
+
+async function runTool(env, call) {
+  let args = {};
+  try { args = JSON.parse(call.function?.arguments || "{}"); } catch {}
+  if (call.function?.name === "web_search") return webSearch(env, String(args.query || "").slice(0, 300));
+  if (call.function?.name === "open_url") return openUrl(String(args.url || ""));
+  return "Неизвестный инструмент.";
+}
+
+// Вызов модели; при forced модель может вызывать инструменты (до 3 кругов), потом даёт финальный ответ.
+async function complete(env, messages, { tools = false, maxTokens = 400 } = {}) {
+  for (let i = 0; i < 4; i++) {
+    const useTools = tools && i < 3;
+    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
+      signal: AbortSignal.timeout(30_000),
+      body: JSON.stringify({ model: env.LLM_MODEL, max_tokens: maxTokens, messages, ...(useTools ? { tools: TOOLS } : {}) }),
+    });
+    const msg = (await r.json()).choices?.[0]?.message;
+    if (useTools && msg?.tool_calls?.length) {
+      messages.push(msg);
+      for (const call of msg.tool_calls) {
+        console.log("tool", call.function?.name);
+        messages.push({ role: "tool", tool_call_id: call.id, content: await runTool(env, call) });
+      }
+      continue;
+    }
+    return msg?.content ?? "";
+  }
+  return "";
+}
+
+export async function decide(env, rows, forced, replied = null, extra = "") {
   const log = rows.map((r) => `${r.name}: ${r.text}`).join("\n");
   const task = forced
     ? "К тебе обратились напрямую (последнее сообщение адресовано тебе): ответь действием text, по делу и в своём стиле. Молчать нельзя."
@@ -65,24 +155,16 @@ export async function decide(env, rows, forced, replied = null) {
   if (replied) {
     userText += `Последнее сообщение — ответ на это сообщение (вот о чём речь):\n${replied.name}: ${replied.text || "(без текста)"}${replied.image ? " [к сообщению приложено фото, оно ниже]" : ""}\n\n`;
   }
+  if (extra) userText += `Содержимое ссылок из этих сообщений (ты уже открыл их):\n${extra}\n\n`;
   userText += task;
   const content = replied?.image
     ? [{ type: "text", text: userText }, { type: "image_url", image_url: { url: replied.image } }]
     : userText;
-  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
-    signal: AbortSignal.timeout(25_000),
-    body: JSON.stringify({
-      model: env.LLM_MODEL,
-      max_tokens: forced ? 900 : 400,
-      messages: [
-        { role: "system", content: forced ? `${SYSTEM}\n\nСейчас разрешено только действие text: {"action":"text","text":"реплика"}. Правило про «1-2 фразы» тут НЕ действует: на прямое обращение отвечай развёрнуто, 3-6 предложений (до 900 символов). Если обращаются ответом на сообщение (новость, пост, фото), разбери его по существу: назови 1-2 конкретных пункта оттуда, выскажи свою позицию, обыграй мемом или чёрным юмором и закончи подколкой или встречным вопросом. Не ограничивайся общими шутками про заголовок. Отвечай с матом.` : SYSTEM },
-        { role: "user", content },
-      ],
-    }),
-  });
-  const out = (await r.json()).choices?.[0]?.message?.content ?? "";
+  const tools = forced && env.OPENROUTER_API_KEY;
+  const system = forced
+    ? `${SYSTEM}\n\nСейчас разрешено только действие text: {"action":"text","text":"реплика"}. Правило про «1-2 фразы» тут НЕ действует: на прямое обращение отвечай развёрнуто, 3-6 предложений (до 900 символов). Если обращаются ответом на сообщение (новость, пост, фото, ссылка), разбери его по существу: назови 1-2 конкретных пункта оттуда, выскажи свою позицию, обыграй мемом или чёрным юмором и закончи подколкой или встречным вопросом. Не ограничивайся общими шутками про заголовок. Отвечай с матом.\nУ тебя есть инструменты: web_search (поиск в интернете) и open_url (прочитать страницу). Если вопрос про цены, новости, характеристики, даты или любые факты, которые ты не знаешь точно, СНАЧАЛА вызови web_search и опирайся на найденные цифры, не выдумывай их. Итоговый ответ всегда в JSON {"action":"text","text":"…"}.`
+    : SYSTEM;
+  const out = await complete(env, [{ role: "system", content: system }, { role: "user", content }], { tools, maxTokens: forced ? 1100 : 400 });
   const m = out.match(/\{[\s\S]*\}/);
   return m ? JSON.parse(m[0]) : null;
 }
@@ -128,9 +210,12 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
       image: rep.photo ? await photoDataUrl(env, rep.photo) : null,
     };
     const rows = await history(env, chatId);
-    let d = await decide(env, rows, forced, replied).catch((e) => (console.error("decide", e.message), null));
+    // ссылки из сообщения и из того, на которое ответили: открываем сразу (до двух), чтобы бот видел страницу, а не только адрес
+    const urls = [...new Set([...(msg.text || "").matchAll(URL_RE), ...((rep?.text || rep?.caption || "").matchAll(URL_RE))].map((m) => m[0]))].slice(0, 2);
+    const extra = forced && urls.length ? (await Promise.all(urls.map(async (u) => `[${u}]\n${await openUrl(u)}`))).join("\n\n").slice(0, 9000) : "";
+    let d = await decide(env, rows, forced, replied, extra).catch((e) => (console.error("decide", e.message), null));
     // На прямое обращение молчать нельзя: один повтор, потом запасная фраза.
-    if (forced && d?.action !== "text") d = await decide(env, rows, forced, replied).catch(() => null);
+    if (forced && d?.action !== "text") d = await decide(env, rows, forced, replied, extra).catch(() => null);
     if (forced && d?.action !== "text") d = { action: "text", text: pick(FALLBACKS) };
     if (!d || d.action === "skip") return false;
 
