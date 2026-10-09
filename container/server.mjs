@@ -34,13 +34,19 @@ const tg = (method, body) =>
     body: JSON.stringify(body),
   });
 
-const run = (cmd, args) =>
+const run = (cmd, args, okCodes = [0]) =>
   new Promise((resolve, reject) => {
     const p = spawn(cmd, args);
     let err = "";
     p.stderr.on("data", (d) => (err += d));
-    p.on("close", (code) => (code === 0 ? resolve() : reject(new Error(err.slice(-300)))));
+    p.on("close", (code) => (okCodes.includes(code) ? resolve() : reject(new Error(err.slice(-600)))));
   });
+
+// Короткая причина для пользователя: строка «ERROR: …» из вывода yt-dlp.
+const reason = (e) => {
+  const line = String(e.message).split("\n").reverse().find((l) => /ERROR/i.test(l)) ?? String(e.message).split("\n").pop();
+  return line.replace(/\[[^\]]+\]\s*/g, "").replace(/https?:\/\/\S+/g, "").slice(0, 160).trim();
+};
 
 const out = (cmd, args) =>
   new Promise((resolve, reject) => {
@@ -102,7 +108,7 @@ async function download({ chat_id, message_id, url }) {
     await tg("sendMessage", {
       chat_id,
       reply_parameters,
-      text: "Не смог скачать: ролик слишком большой, приватный или площадка меня заблокировала.",
+      text: `Не смог скачать: ${reason(e)}`,
     });
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -114,16 +120,17 @@ async function audio({ chat_id, message_id, query }) {
   try {
     await tg("sendChatAction", { chat_id, action: "upload_voice" });
     // Ссылка качается как есть, текст ищется на YouTube (первый результат).
-    const src = /^https?:\/\//i.test(query) ? query : `ytsearch1:${query}`;
+    const src = /^https?:\/\//i.test(query) ? query : `ytsearch5:${query}`;
     await run("yt-dlp", [
       "--no-playlist", ...cookieArgs,
       "--max-filesize", `${MAX_MB}M`,
       "--match-filters", "duration<900", // не тащим часовые миксы
       "-x", "--audio-format", "mp3", "--audio-quality", "192K",
       "--write-info-json",
+      "--max-downloads", "1", // из пяти результатов берём первый подходящий
       "-o", path.join(dir, "audio.%(ext)s"),
       src,
-    ]);
+    ], [0, 101]); // 101 = лимит скачиваний достигнут, это успех
     const files = await readdir(dir);
     const mp3 = files.find((f) => f.endsWith(".mp3"));
     if (!mp3) throw new Error("mp3 нет (длиннее 15 минут или не найдено)");
@@ -145,7 +152,7 @@ async function audio({ chat_id, message_id, query }) {
     await tg("sendMessage", {
       chat_id,
       reply_parameters: { message_id },
-      text: "Не нашёл или не смог скачать трек (длиннее 15 минут, недоступен или слишком большой).",
+      text: `Не смог скачать трек: ${reason(e)}`,
     });
   } finally {
     await rm(dir, { recursive: true, force: true });
