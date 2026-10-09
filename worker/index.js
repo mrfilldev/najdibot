@@ -204,6 +204,17 @@ function shouldRoast(chatId, botId) {
   return true;
 }
 
+// Случайный лай в группах: примерно на каждое 25-е сообщение, не чаще раза в 2 минуты на чат.
+const BARKS = ["ГАВ ГАВ ГАВ ГАВ", "ГАВ!", "гав гав гав", "ГАААВ ГАВ ГАВ", "гав.", "ГАВ ГАВ ГАВ ГАВ ГАВ ГАВ!!!", "ррр... ГАВ"];
+const lastBark = new Map();
+function shouldBark(chatId) {
+  const now = Date.now();
+  if (now - (lastBark.get(chatId) ?? 0) < 120_000) return false;
+  if (Math.random() > 0.04) return false;
+  lastBark.set(chatId, now);
+  return true;
+}
+
 const PLAY = /^сыграйбля[\s,:;!.-]+(.{2,})$/is;
 const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
 
@@ -299,6 +310,10 @@ export default {
       await reply(env, msg, rude
         ? JOKES[Math.floor(Math.random() * JOKES.length)]
         : `Ищу «${esc(t.query)}»:\n${linksText(t.query, t.cats)}`);
+    }
+    // Ни один триггер не сработал: иногда просто лаем.
+    if (text && !isPrivate && !text.startsWith("/") && shouldBark(msg.chat.id)) {
+      await reply(env, msg, BARKS[Math.floor(Math.random() * BARKS.length)]);
     }
     return new Response("ok");
   },
