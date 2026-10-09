@@ -204,12 +204,16 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
   try {
     if (forced) await tg("sendChatAction", { chat_id: chatId, action: "typing" });
     const rep = msg.reply_to_message;
-    const replied = rep && {
+    let replied = rep && {
       name: rep.from?.first_name || rep.from?.username || "кто-то",
       text: (rep.text || rep.caption || "").slice(0, forced ? 3500 : 500),
       image: rep.photo ? await photoDataUrl(env, rep.photo) : null,
     };
     const rows = await history(env, chatId);
+    // фото в самом сообщении (с подписью, обращённой к боту): тоже показываем модели
+    if (!replied?.image && msg.photo) {
+      replied = { name: msg.from?.first_name || "кто-то", text: (msg.caption || "").slice(0, 1500), image: await photoDataUrl(env, msg.photo) };
+    }
     // ссылки из сообщения и из того, на которое ответили: открываем сразу (до двух), чтобы бот видел страницу, а не только адрес
     const urls = [...new Set([...(msg.text || "").matchAll(URL_RE), ...((rep?.text || rep?.caption || "").matchAll(URL_RE))].map((m) => m[0]))].slice(0, 2);
     const extra = forced && urls.length ? (await Promise.all(urls.map(async (u) => `[${u}]\n${await openUrl(u)}`))).join("\n\n").slice(0, 9000) : "";
@@ -326,7 +330,7 @@ export async function casinoLine(env, { win, player, reelNames, target, targetMs
 
 // ---- «Доебись до …»: бот цепляет участника с тегом и ведёт с ним диалог ----
 // Имена, на которые откликается бот (без учёта регистра): найдибля/найдибот/@najdibot, Санни, Sunny, Саныч (+падежи), Сан-Саныч, СанСаныч.
-export const BOT_NAMES = "(?:найдибля|найдибот|@najdibot|санни|sunny|сан[\\s-]?саныч(?:а|у|ем|е)?|саныч(?:а|у|ем|е)?)";
+export const BOT_NAMES = "(?:найдибля|найдибот|@najdibot|санни|sunny|сан[\\s-]?саныч(?:а|у|ем|е)?|саныч(?:а|у|ем|е)?|саня|саню|сане|саней|санёк|санька|саньку|санек)";
 // Обращение к боту где угодно в тексте (слово целиком, чтобы не ловить «саннитов» и «sunnyvale»).
 export const ALIAS_RE = new RegExp(`(?<![а-яёa-z@])${BOT_NAMES}(?![а-яёa-z])`, "i");
 export const POKE_RE = new RegExp(`${BOT_NAMES}[\\s,:]*(?:до|при)ебись(?:\\s+(?:до|к)\\s+(.+?))?\\s*[!.?]*$`, "is");
@@ -347,13 +351,13 @@ function matchName(arg, people) {
   }) ?? null;
 }
 
-async function ask(env, system, user, maxTokens = 220) {
+async function ask(env, system, user, maxTokens = 220, image = null) {
   try {
     const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
       signal: AbortSignal.timeout(20_000),
-      body: JSON.stringify({ model: env.LLM_MODEL, max_tokens: maxTokens, temperature: 1.0, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
+      body: JSON.stringify({ model: env.LLM_MODEL, max_tokens: maxTokens, temperature: 1.0, messages: [{ role: "system", content: system }, { role: "user", content: image ? [{ type: "text", text: user }, { type: "image_url", image_url: { url: image } }] : user }] }),
     });
     return (await r.json()).choices?.[0]?.message?.content?.trim() || null;
   } catch (e) {
@@ -429,7 +433,19 @@ export async function pokeContinue(env, tg, msg) {
   const last = row.left === 1;
   const sys = `${POKE_SYSTEM}\n\nДиалог уже идёт: ты доёбываешься до ${row.name}, он ответил. Ответь коротко на его слова, зацепись и дави дальше, задай следующий вопрос.${last ? " Это твоя последняя реплика: ехидно закругляйся." : ""}`;
   await tg("sendChatAction", { chat_id: chatId, action: "typing" });
-  const line = await ask(env, sys, `Последние сообщения чата:\n${log}\n\nОтветь ${row.name}.`);
+  // если он ответил на чужое сообщение или прислал фото, показываем и их
+  const rep = msg.reply_to_message;
+  let ctxExtra = "";
+  let image = null;
+  if (rep) {
+    ctxExtra += `\nОн ответил на сообщение ${rep.from?.first_name || "кого-то"}: «${(rep.text || rep.caption || "(без текста)").slice(0, 1500)}»${rep.photo ? " (к нему приложено фото)" : ""}.`;
+    if (rep.photo) image = await photoDataUrl(env, rep.photo);
+  }
+  if (!image && msg.photo) {
+    ctxExtra += `\nОн прислал фото${msg.caption ? ` с подписью «${msg.caption.slice(0, 500)}»` : ""}.`;
+    image = await photoDataUrl(env, msg.photo);
+  }
+  const line = await ask(env, sys, `Последние сообщения чата:\n${log}${ctxExtra}\n\nОтветь ${row.name}.`, 220, image);
   if (!line) return false;
   await tg("sendMessage", { chat_id: chatId, text: line.slice(0, 600), reply_parameters: { message_id: msg.message_id } });
   await remember(env, chatId, 0, "Найдибот", line);

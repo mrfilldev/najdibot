@@ -444,7 +444,7 @@ export default {
     }
 
     const msg = update.message;
-    const text = msg?.text?.trim();
+    const text = (msg?.text ?? msg?.caption)?.trim(); // подпись к фото тоже считается текстом (триггеры, обращение к боту)
     const isPrivate = msg?.chat.type === "private";
     const isGroup = msg && !isPrivate && msg.chat.type !== "channel";
     if (isGroup && text && /^\/forget(@\w+)?\b/i.test(text)) {
