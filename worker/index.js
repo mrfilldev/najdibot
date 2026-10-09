@@ -54,6 +54,8 @@ const WORLD = [
   ["Весь мир", [
     ["Google", "https://www.google.com/search?q="],
     ["Google Shopping", "https://www.google.com/search?tbm=shop&q="],
+    ["Google Картинки", "https://www.google.com/search?tbm=isch&q="],
+    ["Яндекс Картинки", "https://yandex.ru/images/search?text="],
     ["Amazon", "https://www.amazon.com/s?k="],
     ["eBay", "https://www.ebay.com/sch/i.html?_nkw="],
     ["AliExpress", "https://www.aliexpress.com/wholesale?SearchText="],
@@ -624,9 +626,12 @@ export default {
       return new Response("ok");
     }
     // В личке любой текст — запрос РФ (или «найди …» — мир), в группах нужен триггер.
-    const t = text && !text.startsWith("/")
+    const t0 = text && !text.startsWith("/")
       ? (parseTrigger(text) || (isPrivate ? { cats: CATEGORIES, query: text } : null))
       : null;
+    // «найди …» ответом самому боту: это просьба, а не поиск ссылок, пусть отвечает серьёзный режим (он реально ищет)
+    const replyToBot0 = msg?.reply_to_message?.from?.id === Number(env.BOT_TOKEN.split(":")[0]);
+    const t = t0 && !(replyToBot0 && !isPrivate && t0.cats === WORLD) ? t0 : null;
     const wm = text && text.match(WEATHER);
     const city = wm && CITIES.find(([stem]) => wm[1].toLowerCase().startsWith(stem));
     if (city && Date.now() - (lastWeather.get(msg.chat.id) ?? 0) > 20_000) {
@@ -758,6 +763,7 @@ export default {
       await reply(env, msg, rude
         ? JOKES[Math.floor(Math.random() * JOKES.length)]
         : `Ищу «${esc(t.query)}»:\n${linksText(t.query, t.cats)}`);
+      return new Response("ok");
     }
     // Ни один триггер не сработал: участвуем в беседе (если обратились — всегда), иначе иногда лаем.
     if (text && !isPrivate && !text.startsWith("/")) {
