@@ -6,6 +6,7 @@ compatibility_date = "2026-10-01"
 class_name = "Downloader"
 image = "./container/Dockerfile"
 max_instances = 1
+instance_type = "basic"
 
 [[durable_objects.bindings]]
 name = "DOWNLOADER"
