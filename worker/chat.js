@@ -242,9 +242,13 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
     const urls = [...new Set([...(msg.text || "").matchAll(URL_RE), ...((rep?.text || rep?.caption || "").matchAll(URL_RE))].map((m) => m[0]))].slice(0, 2);
     const extra = forced && urls.length ? (await Promise.all(urls.map(async (u) => `[${u}]\n${await openUrl(u)}`))).join("\n\n").slice(0, 9000) : "";
     const mood = (await moodPrompt(env, chatId, forced ? { id: msg.from?.id, name: msg.from?.first_name } : null)) + (forced ? `\n${await relationPrompt(env, chatId, msg.from.id, msg.from?.first_name || "собеседник")}\n${await relationsSummary(env, chatId)}` : "");
+    let about = "";
+    if (forced) {
+      about = await mentionedPeople(env, chatId, [msg.text || msg.caption || "", rep?.text || rep?.caption || ""], msg.from?.id).catch(() => "");
+    }
     const asker = forced ? { name: msg.from?.first_name || msg.from?.username || "собеседник", text: (msg.text || msg.caption || "").slice(0, 700) } : null;
     const feel = forced ? await loadFeeling(env, chatId, msg.from.id).catch(() => null) : null;
-    let d = await decide(env, rows, forced, replied, extra, asker, mood).catch((e) => (console.error("decide", e.message), null));
+    let d = await decide(env, rows, forced, replied, extra, asker, mood + (about ? `\n${about}` : "")).catch((e) => (console.error("decide", e.message), null));
     // На прямое обращение молчать нельзя: один повтор, потом запасная фраза.
     if (forced && d?.action !== "text") d = await decide(env, rows, forced, replied, extra, asker, mood).catch(() => null);
     // человеку с плюсом мат недопустим: одна попытка переписать, иначе маскируем матерные слова
@@ -732,4 +736,21 @@ export async function apologize(env, chatId, userId, name) {
   await env.DB.prepare("INSERT OR REPLACE INTO feelings (chat_id, user_id, name, score, note, updated) VALUES (?,?,?,?,?,?)")
     .bind(chatId, userId, name || cur?.name || "кто-то", 2, "извинился передо мной", Math.floor(Date.now() / 1000)).run().catch(() => {});
   return true;
+}
+
+// Досье на людей, названных в сообщении по @нику: кто это, что недавно писал и как к нему относится бот.
+export async function mentionedPeople(env, chatId, texts, askerId = null, ownUsername = "najdibot") {
+  const handles = [...new Set([...texts.join(" ").matchAll(/@([A-Za-z0-9_]{4,})/g)].map((m) => m[1].toLowerCase()))].filter((h) => h !== ownUsername).slice(0, 3);
+  const out = [];
+  for (const h of handles) {
+    const row = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND lower(username)=? ORDER BY id DESC LIMIT 1").bind(chatId, h).first().catch(() => null);
+    if (!row) {
+      out.push(`@${h}: такого ника в чате ещё не писало, ты о нём ничего не знаешь (так и скажи, без «справочника»).`);
+      continue;
+    }
+    const { results } = await env.DB.prepare("SELECT text FROM messages WHERE chat_id=? AND user_id=? ORDER BY id DESC LIMIT 6").bind(chatId, row.user_id).all().catch(() => ({ results: [] }));
+    const f = await loadFeeling(env, chatId, row.user_id).catch(() => null);
+    out.push(`@${h} это участник чата «${row.name}»${row.user_id === askerId ? " (это сам собеседник, который тебя спрашивает: говори о нём во втором лице, «ты»)" : ""}. Его недавние сообщения: ${results.map((r) => `«${String(r.text).slice(0, 100)}»`).join("; ") || "(тихо)"}. ${f && f.score !== 0 ? `Твоё отношение к нему: ${FEEL_WORDS(f.score)}${f.note ? `, ${f.note}` : ""}.` : "Особых чувств к нему нет."}`);
+  }
+  return out.length ? `О ком спрашивают (по нику):\n${out.join("\n")}\nЕсли тебя спрашивают, что ты думаешь об этом человеке, отвечай по этим данным в своём стиле: опирайся на его сообщения и своё отношение, не говори, что имя ни о чём не говорит.` : "";
 }
