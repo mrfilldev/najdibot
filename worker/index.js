@@ -255,13 +255,13 @@ function shouldRoast(chatId, botId, { cooldown = 60_000, chance = 0.7 } = {}) {
   return true;
 }
 
-// Случайный лай в группах: примерно на каждое 25-е сообщение, не чаще раза в 2 минуты на чат.
+// Случайный лай в группах: примерно на каждое 4-е сообщение, не чаще раза в 2 минуты на чат.
 const BARKS = ["ГАВ ГАВ ГАВ ГАВ", "ГАВ!", "гав гав гав", "ГАААВ ГАВ ГАВ", "гав.", "ГАВ ГАВ ГАВ ГАВ ГАВ ГАВ!!!", "ррр... ГАВ"];
 const lastBark = new Map();
 function shouldBark(chatId) {
   const now = Date.now();
   if (now - (lastBark.get(chatId) ?? 0) < 120_000) return false;
-  if (Math.random() > 0.04) return false;
+  if (Math.random() > 0.25) return false;
   lastBark.set(chatId, now);
   return true;
 }
