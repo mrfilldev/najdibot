@@ -100,6 +100,32 @@ const JOKES = [
   "Поиск завершён: никто не пострадал, кроме моего самоуважения.",
 ];
 
+// «найдибля координаты <фраза>» — место на карте. Точка выбирается по хэшу фразы,
+// поэтому одна и та же фраза всегда ведёт в одно и то же место.
+const COORDS = /^координат[а-яё]*[\s,:;!.-]+(.{2,})$/is;
+const PLACES = [
+  [-48.8767, -123.3933, "Точка Немо", "Самое далёкое место от людей. Отсюда до ближайшей суши 2688 км."],
+  [0, 0, "Нулевой остров", "Координаты 0, 0. Острова нет, но пин стоит."],
+  [90, 0, "Северный полюс", "Тут холодно и никто не услышит."],
+  [-90, 0, "Южный полюс", "Дальше только вверх."],
+  [-78.4645, 106.8372, "Станция «Восток»", "Антарктида, -89 °C. Зато без сплетен."],
+  [11.373, 142.591, "Марианская впадина", "Глубина 10 994 м. Глубже уже некуда."],
+  [67.55, 133.39, "Верхоянск", "Полюс холода. Остынь."],
+  [45.2167, 36.7167, "Тамань (Тьмутаракань)", "Та самая Тьмутаракань. Ехать далеко."],
+  [50.7967, 42.0, "Урюпинск", "Классика жанра. Вас тут ждали."],
+  [53.1384, 29.2214, "Бобруйск", "Бобруйск, жывы беларусь. Приходи, будем рады."],
+  [69.3989, 30.6119, "Кольская сверхглубокая", "Самая глубокая дыра в мире. Ну почти сюда."],
+  [25.0, -71.0, "Бермудский треугольник", "Найти можно. Вернуться нет."],
+  [59.5603, 150.8, "Магадан", "Дальше только море."],
+  [67.4948, 64.0453, "Воркута", "Тоже за полярным кругом, но с пивом."],
+];
+
+function placeFor(phrase) {
+  let h = 0;
+  for (const ch of phrase.toLowerCase()) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return PLACES[h % PLACES.length];
+}
+
 function linksText(query, cats = CATEGORIES) {
   const q = encodeURIComponent(query).replace(/%20/g, "+");
   return cats.map(([cat, items]) =>
@@ -119,6 +145,14 @@ function buildResults(query, cats = CATEGORIES) {
       parse_mode: "HTML",
     },
   }));
+}
+
+function tg(env, method, body) {
+  return fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 async function reply(env, msg, text) {
@@ -149,7 +183,17 @@ export default {
       const raw = inline.query.trim();
       const t = parseTrigger(raw);
       const query = t ? t.query : raw;
-      const results = query.length < 2 ? [] : buildResults(query, t ? t.cats : CATEGORIES);
+      const c = query.match(COORDS);
+      let results;
+      if (c) {
+        const [lat, lng, name, note] = placeFor(c[1].trim());
+        results = [{
+          type: "venue", id: "coords", latitude: lat, longitude: lng,
+          title: c[1].trim(), address: `${name}. ${note}`,
+        }];
+      } else {
+        results = query.length < 2 ? [] : buildResults(query, t ? t.cats : CATEGORIES);
+      }
       await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/answerInlineQuery`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -173,7 +217,17 @@ export default {
     const t = text && !text.startsWith("/")
       ? (parseTrigger(text) || (isPrivate ? { cats: CATEGORIES, query: text } : null))
       : null;
-    if (t && t.query.length >= 2) {
+    const c = t && t.query.match(COORDS);
+    if (c) {
+      const phrase = c[1].trim();
+      const [lat, lng, name, note] = placeFor(phrase);
+      await tg(env, "sendVenue", {
+        chat_id: msg.chat.id,
+        reply_parameters: { message_id: msg.message_id },
+        latitude: lat, longitude: lng,
+        title: phrase.slice(0, 100), address: `${name}. ${note}`,
+      });
+    } else if (t && t.query.length >= 2) {
       const rude = RUDE.test(t.query);
       await reply(env, msg, rude
         ? JOKES[Math.floor(Math.random() * JOKES.length)]
