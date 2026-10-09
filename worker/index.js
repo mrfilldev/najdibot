@@ -1,4 +1,5 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
+import { MOD_CMD, moderate } from "./mod.js";
 import { MEME_HINT, casinoLine, digest, forget, maybeChat, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
@@ -294,6 +295,7 @@ const HELP = [
   "Ответь на сообщение чужого бота — я его обматерю (нейросеть)",
   "<code>депни в казик</code> — крутану автомат 🎰: проиграл — погорюю, выиграл — оскорблю кого-нибудь из чата",
   "<code>/сводка</code> — юмористическая сводка чата за 12 часов (и сам пришлю её в 18:00 и в полночь)",
+  "<b>Для админов</b> (ответом на сообщение, бот должен быть админом): <code>/mute [мин]</code>, <code>/unmute</code>, <code>/ban</code>, <code>/unban</code>, <code>/kick</code>, <code>/del</code>, <code>/warn</code> (3 = мьют на час), <code>/unwarn</code>, <code>/warns</code>",
   "В группах иногда лаю: ГАВ",
   "В группах читаю чат, сам иногда вставляю слово, реакцию или мем с Reddit. Позови: @najdibot. <code>/forget</code> — стереть всё, что я помню о тебе",
   "",
@@ -447,6 +449,15 @@ export default {
       await tg(env, "sendChatAction", { chat_id: msg.chat.id, action: "typing" });
       const d = await digest(env, msg.chat.id, 12).catch(() => null);
       await reply(env, msg, d ? esc(d) : "За последние 12 часов в чате почти ничего не было, сводить нечего.");
+      return new Response("ok");
+    }
+    // Модерация (только админы, по реплаю): /mute [мин], /unmute, /ban, /unban, /kick, /del, /warn, /unwarn, /warns
+    const mc = isGroup && text && text.match(MOD_CMD);
+    if (mc) {
+      await moderate({
+        env, tg: (m, b) => tg(env, m, b), reply: (t) => reply(env, msg, t), msg,
+        cmd: mc[1].toLowerCase(), arg: mc[3], ownId: Number(env.BOT_TOKEN.split(":")[0]),
+      }).catch((e) => console.error("moderate", e.message));
       return new Response("ok");
     }
     // Запоминаем текст и подписи к фото группы для контекста (команды и сообщения ботов не храним).
