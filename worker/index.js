@@ -7,6 +7,17 @@ const PLATFORMS = [
   ["Яндекс Маркет", "https://market.yandex.ru/search?text="],
   ["DNS", "https://www.dns-shop.ru/search/?q="],
   ["Авито", "https://www.avito.ru/rossiya?q="],
+  ["Мегамаркет", "https://megamarket.ru/catalog/?q="],
+  ["AliExpress", "https://aliexpress.ru/wholesale?SearchText="],
+  ["М.Видео", "https://www.mvideo.ru/product-list-page?q="],
+  ["Эльдорадо", "https://www.eldorado.ru/search/catalog.php?q="],
+  ["Ситилинк", "https://www.citilink.ru/search/?text="],
+  ["Lamoda", "https://www.lamoda.ru/catalog/?q="],
+  ["Спортмастер", "https://www.sportmaster.ru/catalog/?q="],
+  ["Леруа Мерлен", "https://leroymerlin.ru/search/?q="],
+  ["ВсеИнструменты", "https://www.vseinstrumenti.ru/search_main.php?what="],
+  ["Детский мир", "https://www.detmir.ru/search/results/?searchTerm="],
+  ["Золотое Яблоко", "https://goldapple.ru/catalogsearch/result/?q="],
 ];
 
 const esc = (s) =>
