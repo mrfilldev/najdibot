@@ -36,8 +36,6 @@ const tg = (method, body) =>
     body: JSON.stringify(body),
   });
 
-const YT_ARGS = [...jsArgs, ...cookieArgs];
-
 const run = (cmd, args, okCodes = [0]) =>
   new Promise((resolve, reject) => {
     const p = spawn(cmd, args);
@@ -51,6 +49,19 @@ const reason = (e) => {
   const line = String(e.message).split("\n").reverse().find((l) => /ERROR/i.test(l)) ?? String(e.message).split("\n").pop();
   return line.replace(/\[[^\]]+\]\s*/g, "").replace(/https?:\/\/\S+/g, "").slice(0, 160).trim();
 };
+
+// yt-dlp для YouTube: сначала анонимно (cookies с IP датацентра YouTube начинает отвергать, 403),
+// при ошибке повтор с cookies (нужны для роликов 18+).
+async function runYt(args, okCodes = [0]) {
+  try {
+    return await run("yt-dlp", [...jsArgs, ...args], okCodes);
+  } catch (e) {
+    if (!cookieArgs.length) throw e;
+    console.log("retry with cookies:", reason(e));
+    return run("yt-dlp", [...jsArgs, ...cookieArgs, ...args], okCodes);
+  }
+}
+
 
 const out = (cmd, args) =>
   new Promise((resolve, reject) => {
@@ -83,8 +94,8 @@ async function download({ chat_id, message_id, url }) {
   const dir = await mkdtemp(path.join(tmpdir(), "dl-"));
   try {
     await tg("sendChatAction", { chat_id, action: "upload_video" });
-    await run("yt-dlp", [
-      "--no-playlist", ...YT_ARGS,
+    await runYt([
+      "--no-playlist",
       "--max-filesize", `${MAX_MB}M`,
       // H.264 + AAC: AV1/VP9 на части устройств Telegram показывает чёрный экран
       "-f", `bv*[vcodec^=avc1][height<=720]+ba[acodec^=mp4a]/b[vcodec^=avc1][height<=720]/bv*[height<=720]+ba/b`,
@@ -125,8 +136,8 @@ async function audio({ chat_id, message_id, query }) {
     await tg("sendChatAction", { chat_id, action: "upload_voice" });
     // Ссылка качается как есть, текст ищется на YouTube (первый результат).
     const src = /^https?:\/\//i.test(query) ? query : `ytsearch5:${query}`;
-    await run("yt-dlp", [
-      "--no-playlist", ...YT_ARGS,
+    await runYt([
+      "--no-playlist",
       "--max-filesize", `${MAX_MB}M`,
       "--match-filters", "duration<900", // не тащим часовые миксы
       "-x", "--audio-format", "mp3", "--audio-quality", "192K",
@@ -271,21 +282,24 @@ async function weather({ chat_id, message_id, city, lat, lon }) {
 }
 
 // Служебное: та же загрузка, что в audio(), но без отправки в Telegram; результат возвращается в ответе.
-async function probe({ query }) {
+async function probe({ query, extra = [], nocookies = false }) {
   const dir = await mkdtemp(path.join(tmpdir(), "pr-"));
   try {
     const src = /^https?:\/\//i.test(query) ? query : `ytsearch5:${query}`;
     const t0 = Date.now();
-    await run("yt-dlp", [
-      "--no-playlist", ...YT_ARGS,
+    const probeArgs = [
+      "--no-playlist", ...extra,
       "--max-filesize", `${MAX_MB}M`, "--match-filters", "duration<900",
       "-x", "--audio-format", "mp3", "--audio-quality", "192K", "--max-downloads", "1",
       "-o", path.join(dir, "audio.%(ext)s"), src,
-    ], [0, 101]);
+    ];
+    // nocookies=true — строго анонимно (без повтора), иначе реальный путь бота: анонимно, затем cookies
+    if (nocookies) await run("yt-dlp", [...jsArgs, ...probeArgs], [0, 101]);
+    else await runYt(probeArgs, [0, 101]);
     const files = await readdir(dir);
-    return { ok: true, files, ms: Date.now() - t0, cookies: cookieArgs.length > 0 };
+    return { ok: true, files, ms: Date.now() - t0, cookies: cookieArgs.length > 0 && !nocookies };
   } catch (e) {
-    return { ok: false, error: String(e.message).slice(-900), cookies: cookieArgs.length > 0 };
+    return { ok: false, error: String(e.message).split("\n").filter((l) => /ERROR/.test(l)).slice(-2).join(" | ").slice(0, 400), cookies: cookieArgs.length > 0 && !nocookies };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
