@@ -426,6 +426,8 @@ export default {
       } else {
         results = query.length < 2 ? [] : buildResults(query, t ? t.cats : CATEGORIES);
       }
+      // Служебное: inline_query с id "dbg" возвращает результат в HTTP-ответе (проверка без Telegram).
+      if (inline.id === "dbg") return Response.json({ raw, commandLike, coords: !!c, results: results.length });
       await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/answerInlineQuery`, {
         method: "POST",
         headers: { "content-type": "application/json" },
