@@ -17,6 +17,8 @@ const API = `https://api.telegram.org/bot${TOKEN}`;
 // Приходят секретом как gzip+base64 текста cookies.txt; yt-dlp пишет в файл, поэтому кладём в /tmp.
 const COOKIES = "/tmp/yt-cookies.txt";
 let cookieArgs = [];
+// YouTube без JS-движка отдаёт 403: пусть yt-dlp использует node из образа
+const jsArgs = ["--js-runtimes", "node"];
 if (process.env.YT_COOKIES_GZB64) {
   try {
     writeFileSync(COOKIES, gunzipSync(Buffer.from(process.env.YT_COOKIES_GZB64, "base64")));
@@ -33,6 +35,8 @@ const tg = (method, body) =>
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+
+const YT_ARGS = [...jsArgs, ...cookieArgs];
 
 const run = (cmd, args, okCodes = [0]) =>
   new Promise((resolve, reject) => {
@@ -80,7 +84,7 @@ async function download({ chat_id, message_id, url }) {
   try {
     await tg("sendChatAction", { chat_id, action: "upload_video" });
     await run("yt-dlp", [
-      "--no-playlist", ...cookieArgs,
+      "--no-playlist", ...YT_ARGS,
       "--max-filesize", `${MAX_MB}M`,
       // H.264 + AAC: AV1/VP9 на части устройств Telegram показывает чёрный экран
       "-f", `bv*[vcodec^=avc1][height<=720]+ba[acodec^=mp4a]/b[vcodec^=avc1][height<=720]/bv*[height<=720]+ba/b`,
@@ -122,7 +126,7 @@ async function audio({ chat_id, message_id, query }) {
     // Ссылка качается как есть, текст ищется на YouTube (первый результат).
     const src = /^https?:\/\//i.test(query) ? query : `ytsearch5:${query}`;
     await run("yt-dlp", [
-      "--no-playlist", ...cookieArgs,
+      "--no-playlist", ...YT_ARGS,
       "--max-filesize", `${MAX_MB}M`,
       "--match-filters", "duration<900", // не тащим часовые миксы
       "-x", "--audio-format", "mp3", "--audio-quality", "192K",
@@ -266,8 +270,38 @@ async function weather({ chat_id, message_id, city, lat, lon }) {
   }
 }
 
+// Служебное: та же загрузка, что в audio(), но без отправки в Telegram; результат возвращается в ответе.
+async function probe({ query }) {
+  const dir = await mkdtemp(path.join(tmpdir(), "pr-"));
+  try {
+    const src = /^https?:\/\//i.test(query) ? query : `ytsearch5:${query}`;
+    const t0 = Date.now();
+    await run("yt-dlp", [
+      "--no-playlist", ...YT_ARGS,
+      "--max-filesize", `${MAX_MB}M`, "--match-filters", "duration<900",
+      "-x", "--audio-format", "mp3", "--audio-quality", "192K", "--max-downloads", "1",
+      "-o", path.join(dir, "audio.%(ext)s"), src,
+    ], [0, 101]);
+    const files = await readdir(dir);
+    return { ok: true, files, ms: Date.now() - t0, cookies: cookieArgs.length > 0 };
+  } catch (e) {
+    return { ok: false, error: String(e.message).slice(-900), cookies: cookieArgs.length > 0 };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 http
   .createServer((req, res) => {
+    if (req.method === "POST" && req.url === "/probe") {
+      let b = "";
+      req.on("data", (c) => (b += c));
+      req.on("end", async () => {
+        const r = await probe(JSON.parse(b)).catch((e) => ({ ok: false, error: String(e.message) }));
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(r));
+      });
+      return;
+    }
     const handler = { "/download": download, "/audio": audio, "/weather": weather }[req.url];
     if (req.method !== "POST" || !handler) {
       res.writeHead(200).end("ok");

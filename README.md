@@ -25,3 +25,9 @@ Telegram-бот @najdibot на Cloudflare Workers (+ Container для скачи
 - `legacy-python/` — первая версия на aiogram (polling), не используется.
 - Секреты в Worker: `BOT_TOKEN`, `WEBHOOK_SECRET`, `OPENROUTER_API_KEY`. Модель — `LLM_MODEL` в `wrangler.toml`.
 - Деплой: `DOCKER_CONTEXT=desktop-linux npx wrangler deploy`; webhook: `./set-webhook.sh <url>`.
+
+## Служебное
+- `POST /debug {"query": "..."}` и `POST /restart` с заголовком `X-Telegram-Bot-Api-Secret-Token` (= `WEBHOOK_SECRET`):
+  пробная загрузка в контейнере с реальной ошибкой и принудительный перезапуск экземпляра.
+  После `wrangler deploy` живой контейнер продолжает работать на старом коде, пока не уснёт (10 мин), поэтому нужен `/restart`.
+- Контейнеру нужен `--js-runtimes node` для `yt-dlp`, иначе YouTube отвечает 403.

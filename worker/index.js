@@ -336,6 +336,17 @@ const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com
 export default {
   async fetch(request, env, ctx) {
     if (request.method !== "POST") return new Response("ok");
+    // Служебное: POST /restart (с секретом вебхука) — убить живой экземпляр контейнера, чтобы после деплоя поднялась новая версия.
+    if (new URL(request.url).pathname === "/restart") {
+      if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("forbidden", { status: 403 });
+      await getContainer(env.DOWNLOADER).destroy();
+      return new Response("container destroyed");
+    }
+    // Служебное: POST /debug {query} (с секретом вебхука) — пробный запуск загрузки в контейнере, возвращает реальную ошибку.
+    if (new URL(request.url).pathname === "/debug") {
+      if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("forbidden", { status: 403 });
+      return getContainer(env.DOWNLOADER).fetch("http://container/probe", { method: "POST", body: await request.text() });
+    }
     // Telegram присылает наш секрет в заголовке; чужие запросы отбрасываем.
     if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) {
       return new Response("forbidden", { status: 403 });
