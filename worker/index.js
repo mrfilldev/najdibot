@@ -43,6 +43,20 @@ const CATEGORIES = [
   ]],
 ];
 
+// «найди <запрос>» — глобальный поиск по мировым площадкам.
+const WORLD = [
+  ["Весь мир", [
+    ["Google", "https://www.google.com/search?q="],
+    ["Google Shopping", "https://www.google.com/search?tbm=shop&q="],
+    ["Amazon", "https://www.amazon.com/s?k="],
+    ["eBay", "https://www.ebay.com/sch/i.html?_nkw="],
+    ["AliExpress", "https://www.aliexpress.com/wholesale?SearchText="],
+    ["Temu", "https://www.temu.com/search_result.html?search_key="],
+    ["Etsy", "https://www.etsy.com/search?q="],
+  ]],
+];
+
+const flat = (cats) => cats.flatMap(([cat, items]) => items.map(([n, u]) => [n, u, cat]));
 const PLATFORMS = CATEGORIES.flatMap(([cat, items]) => items.map(([n, u]) => [n, u, cat]));
 
 const esc = (s) =>
@@ -50,6 +64,16 @@ const esc = (s) =>
 
 // Триггер в чате: сообщение начинается со слова «найдибля», дальше запрос.
 const TRIGGER = /^найдибля[\s,:;!.-]*(.{2,})$/is;
+const TRIGGER_WORLD = /^найди[\s,:;!.-]+(.{2,})$/is;
+
+// Разбор текста: «найдибля …» — РФ, «найди …» — мир. Возвращает {cats, query} или null.
+function parseTrigger(text) {
+  let m = text.match(TRIGGER);
+  if (m) return { cats: CATEGORIES, query: m[1].trim() };
+  m = text.match(TRIGGER_WORLD);
+  if (m) return { cats: WORLD, query: m[1].trim() };
+  return null;
+}
 
 // Запрос с матом: вместо ссылок отвечаем стёбом.
 const RUDE = /бля|хуй|хуе|пизд|ебан|ебат|еба[нл]|сука|нахуй/i;
@@ -76,16 +100,16 @@ const JOKES = [
   "Поиск завершён: никто не пострадал, кроме моего самоуважения.",
 ];
 
-function linksText(query) {
+function linksText(query, cats = CATEGORIES) {
   const q = encodeURIComponent(query).replace(/%20/g, "+");
-  return CATEGORIES.map(([cat, items]) =>
+  return cats.map(([cat, items]) =>
     `<b>${cat}:</b> ` + items.map(([name, base]) => `<a href="${esc(base + q)}">${name}</a>`).join(" · ")
   ).join("\n");
 }
 
-function buildResults(query) {
+function buildResults(query, cats = CATEGORIES) {
   const q = encodeURIComponent(query).replace(/%20/g, "+");
-  return PLATFORMS.map(([name, base, cat], i) => ({
+  return flat(cats).map(([name, base, cat], i) => ({
     type: "article",
     id: String(i),
     title: name,
@@ -122,8 +146,10 @@ export default {
     const update = await request.json();
     const inline = update.inline_query;
     if (inline) {
-      const query = inline.query.trim();
-      const results = query.length < 2 ? [] : buildResults(query);
+      const raw = inline.query.trim();
+      const t = parseTrigger(raw);
+      const query = t ? t.query : raw;
+      const results = query.length < 2 ? [] : buildResults(query, t ? t.cats : CATEGORIES);
       await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/answerInlineQuery`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -140,17 +166,18 @@ export default {
     const isPrivate = msg?.chat.type === "private";
     if (isPrivate && text && /^\/(start|help)\b/i.test(text)) {
       await reply(env, msg, "Пиши, что искать, и я дам ссылки на Ozon, Wildberries, Маркет, DNS и Авито.\n" +
-        "В любом чате работает и так: <code>@najdibot запрос</code>. В группах: <code>найдибля запрос</code>.");
+        "В любом чате работает и так: <code>@najdibot запрос</code>. В группах: <code>найдибля запрос</code> (РФ) или <code>найди запрос</code> (весь мир).");
       return new Response("ok");
     }
-    // В личке любой текст — запрос, в группах нужен триггер.
-    const m = text && (isPrivate ? [null, text.replace(/^найдибля[\s,:;!.-]*/i, "") || text] : text.match(TRIGGER));
-    if (m && m[1].length >= 2 && !text.startsWith("/")) {
-      const query = m[1].trim();
-      const rude = RUDE.test(query);
+    // В личке любой текст — запрос РФ (или «найди …» — мир), в группах нужен триггер.
+    const t = text && !text.startsWith("/")
+      ? (parseTrigger(text) || (isPrivate ? { cats: CATEGORIES, query: text } : null))
+      : null;
+    if (t && t.query.length >= 2) {
+      const rude = RUDE.test(t.query);
       await reply(env, msg, rude
         ? JOKES[Math.floor(Math.random() * JOKES.length)]
-        : `Ищу «${esc(query)}»:\n${linksText(query)}`);
+        : `Ищу «${esc(t.query)}»:\n${linksText(t.query, t.cats)}`);
     }
     return new Response("ok");
   },
