@@ -577,14 +577,18 @@ export default {
           casinoLine(env, { win, player, reelNames: reels(v), target: target?.name, targetMsgs }),
           sleep(3500),
         ]);
+        const spinNote = `[крутил автомат 🎰 по просьбе ${player}: выпало ${reels(v).join(", ")}, ${win ? "ДЖЕКПОТ" : "проигрыш"}]`;
         if (!win) {
-          await tg(env, "sendMessage", { chat_id: msg.chat.id, text: line ?? CASINO_LOSS[Math.floor(Math.random() * CASINO_LOSS.length)] });
+          const text = line ?? CASINO_LOSS[Math.floor(Math.random() * CASINO_LOSS.length)];
+          await tg(env, "sendMessage", { chat_id: msg.chat.id, text });
+          await remember(env, msg.chat.id, 0, "Найдибот", `${spinNote} ${text}`).catch(() => {});
           return;
         }
         const who = target ? `<a href="tg://user?id=${target.user_id}">${esc(target.name)}</a>` : "все остальные";
         const tpl = line ?? CASINO_WIN[Math.floor(Math.random() * CASINO_WIN.length)];
         const body = tpl.includes("{who}") ? tpl.split("{who}").map(esc).join(who) : `${who}, ${esc(tpl)}`;
         await tg(env, "sendMessage", { chat_id: msg.chat.id, parse_mode: "HTML", text: body });
+        await remember(env, msg.chat.id, 0, "Найдибот", `${spinNote} ${tpl.replace("{who}", target?.name ?? "все")}`).catch(() => {});
       })());
       return new Response("ok");
     }
