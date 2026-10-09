@@ -1,12 +1,14 @@
 # najdibot: handoff (2026-10-09, конец сессии)
 
-**Состояние.** @najdibot работает на Cloudflare: Worker (`worker/index.js`, `worker/chat.js`) + Container с yt-dlp/ffmpeg (`container/`) + D1 (память чата). Деплой: `DOCKER_CONTEXT=desktop-linux npx wrangler deploy`. После деплоя живой контейнер остаётся на старом коде: `POST /restart` с `X-Telegram-Bot-Api-Secret-Token`. Полный список навыков: `README.md`, `/help`.
+**Состояние.** @najdibot работает на Cloudflare: Worker (`worker/index.js`, `chat.js`, `mod.js`) + Container с yt-dlp/ffmpeg (`container/`) + D1 (память чата, таблицы `messages`, `warns`). Деплой: `DOCKER_CONTEXT=desktop-linux npx wrangler deploy`. После деплоя живой контейнер остаётся на старом коде: `POST /restart` с `X-Telegram-Bot-Api-Secret-Token` (= WEBHOOK_SECRET); `POST /debug {"query"}` даёт реальную ошибку загрузки. Список навыков: `README.md`, `/help`.
 
 **Решения и грабли.**
-- yt-dlp: сначала анонимно, потом с cookies (`runYt`), нужен `--js-runtimes node`. С cookies с IP Cloudflare YouTube даёт 403. Ролики 18+ пока не скачиваются.
-- Секреты в Worker: BOT_TOKEN, WEBHOOK_SECRET, OPENROUTER_API_KEY, YT_COOKIES_GZB64. Локально в `.env` (не в git). Дописывая в `.env`, проверять перевод строки.
-- Озвучка OpenAI (`gpt-audio-mini`) мат пропускает. Для мата нужен Silero (локально). Рецепт голоса №3: `docs/voice-recipe.md`, `tools/voice/`. В бота НЕ подключён.
-- Cron сводки: 15:00 и 21:00 UTC (18:00 и 00:00 МСК), `/сводка` по запросу.
-- Групповая память: 300 сообщений на чат, `/forget` стирает свои. Чат об этом предупреждён автором.
+- yt-dlp: сначала анонимно, потом с cookies (`runYt`), обязателен `--js-runtimes node`. С cookies с IP Cloudflare YouTube даёт 403. Ролики 18+ пока не скачиваются.
+- Секреты в Worker: BOT_TOKEN, WEBHOOK_SECRET, OPENROUTER_API_KEY, YT_COOKIES_GZB64; локально в `.env` (не в git). Дописывая в `.env`, проверять перевод строки.
+- LLM: OpenRouter, модель `LLM_MODEL` в `wrangler.toml` (gemini-2.5-flash). Озвучка OpenAI мат пропускает: для мата нужен Silero. Рецепт голоса №3: `docs/voice-recipe.md`, `tools/voice/`, в бота не подключён.
+- Промпты без стоп-слов по мату и 18+ (решение владельца), но оскорбления по национальности/полу/вере/здоровью оставлены запрещёнными. Отсылки к мемам: `MEME_HINT` в `chat.js`.
+- Казино 🎰: фразы пишет LLM по символам барабанов (джекпоты 1, 22, 43, 64), запасные списки на случай сбоя LLM.
+- Сводка чата: cron 15:00 и 21:00 UTC (18:00 и 00:00 МСК) + `/сводка`. Память: 300 сообщений на чат, `/forget` стирает свои; чат предупреждён автором.
+- Модерация (`mod.js`): /mute /unmute /ban /unban /kick /del /warn /unwarn /warns, только админы, по реплаю. **Бот в группе ещё не админ** («Ебанутые БОБРЫ», id -1003736580622): права «удалять сообщения» и «блокировать» выдаёт владелец, живьём не проверено.
 
-**Открыто.** Модерация (бот не админ, нет /mute /ban /warn, проверки админа), приветствие и капча новичкам, настройки по чату (шансы и функции зашиты в код), подключение голоса Silero к боту, ролики 18+.
+**Открыто.** Выдать боту админку и проверить модерацию; приветствие и капча новичкам; настройки по чату (шансы и функции зашиты в код); подключение голоса Silero к боту; ролики 18+; идея голосового бота в Discord (тонкий клиент + мозг в Worker, нужен VPS).
