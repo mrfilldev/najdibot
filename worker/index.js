@@ -1,5 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { forget, maybeChat, remember } from "./chat.js";
+import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
 // Inline-бот: на @najdibot <запрос> отдаёт ссылки поиска по площадкам.
@@ -295,14 +296,31 @@ const HELP = [
 // «ГАВ ГАВ ГАВ» (три и больше «гав» подряд) — отвечаем голосовым из файла.
 const GAV_CALL = /^(?:гав[\s,.!?-]*){3,}$/i;
 
-async function sendGav(env, msg) {
-  const bytes = Uint8Array.from(atob(GAV_OGG_B64), (c) => c.charCodeAt(0));
+async function sendVoice(env, msg, b64, duration, name) {
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   const form = new FormData();
   form.set("chat_id", String(msg.chat.id));
   form.set("reply_to_message_id", String(msg.message_id));
-  form.set("duration", String(GAV_DURATION));
-  form.set("voice", new Blob([bytes], { type: "audio/ogg" }), "gav.ogg");
+  form.set("duration", String(duration));
+  form.set("voice", new Blob([bytes], { type: "audio/ogg" }), name);
   await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendVoice`, { method: "POST", body: form });
+}
+
+const sendGav = (env, msg) => sendVoice(env, msg, GAV_OGG_B64, GAV_DURATION, "gav.ogg");
+
+// Оскорбление в адрес бота: обращение к нему + ругательное слово. Отвечаем голосовым с шансом INSULT_CHANCE.
+const INSULT = /тупо|тупой|тупая|дебил|идиот|говн|гавн|мраз|урод|(?<![а-яё])лох(?![а-яё])|чмо|хуйн|хуесос|сука|суки|пидор|пидр|нахуй|нахер|заткнись|заткни|ебан|долбо|мудак|мудил|гандон|шлюх|тварь|иди ты|пошёл|пошел|отстой|мусор/i;
+const TO_BOT = /найдибот|найдибля|(?<![а-яё])бот(?![а-яё])|@najdibot/i;
+const INSULT_CHANCE = 0.4;
+const INSULT_COOLDOWN = 30_000;
+const lastInsult = new Map();
+function insultReply(chatId, text, toUs) {
+  if (!(toUs || TO_BOT.test(text)) || !INSULT.test(text)) return false;
+  const now = Date.now();
+  if (now - (lastInsult.get(chatId) ?? 0) < INSULT_COOLDOWN) return false;
+  if (Math.random() > INSULT_CHANCE) return false;
+  lastInsult.set(chatId, now);
+  return true;
 }
 
 const PLAY = /^сыграйбля[\s,:;!.-]+(.{2,})$/is;
@@ -438,6 +456,10 @@ export default {
     if (text && !isPrivate && !text.startsWith("/")) {
       const ownUsername = /@najdibot\b/i.test(text);
       const toUs = msg.reply_to_message?.from?.id === ownId;
+      if (insultReply(msg.chat.id, text, toUs)) {
+        await sendVoice(env, msg, INSULT_OGG_B64, INSULT_DURATION, "insult.ogg");
+        return new Response("ok");
+      }
       if (await maybeChat(env, msg, (m, b) => tg(env, m, b), { forced: ownUsername || toUs })) {
         return new Response("ok");
       }
