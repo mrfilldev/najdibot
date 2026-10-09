@@ -181,7 +181,7 @@ export class Downloader extends Container {
   }
 }
 
-const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com)\/\S+/i;
+const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
 
 export default {
   async fetch(request, env, ctx) {
