@@ -1,0 +1,24 @@
+{
+  "name": "najdibot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mrfilldev/najdibot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/mrfilldev/najdibot/issues"
+  },
+  "homepage": "https://github.com/mrfilldev/najdibot#readme",
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  }
+}

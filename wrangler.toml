@@ -1,3 +1,16 @@
 name = "najdibot"
 main = "worker/index.js"
 compatibility_date = "2026-10-01"
+
+[[containers]]
+class_name = "Downloader"
+image = "./container/Dockerfile"
+max_instances = 1
+
+[[durable_objects.bindings]]
+name = "DOWNLOADER"
+class_name = "Downloader"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Downloader"]

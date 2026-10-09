@@ -1,3 +1,5 @@
+import { Container, getContainer } from "@cloudflare/containers";
+
 // Inline-бот: на @najdibot <запрос> отдаёт ссылки поиска по площадкам.
 // Telegram шлёт сюда апдейты вебхуком, мы отвечаем вызовом answerInlineQuery.
 
@@ -169,8 +171,20 @@ async function reply(env, msg, text) {
   });
 }
 
+// Контейнер с yt-dlp: поднимается по запросу и засыпает через 10 минут простоя.
+export class Downloader extends Container {
+  defaultPort = 8080;
+  sleepAfter = "10m";
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.envVars = { BOT_TOKEN: env.BOT_TOKEN };
+  }
+}
+
+const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com)\/\S+/i;
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method !== "POST") return new Response("ok");
     // Telegram присылает наш секрет в заголовке; чужие запросы отбрасываем.
     if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) {
@@ -217,6 +231,17 @@ export default {
     const t = text && !text.startsWith("/")
       ? (parseTrigger(text) || (isPrivate ? { cats: CATEGORIES, query: text } : null))
       : null;
+    // Ссылка на YouTube/TikTok в любом сообщении — скачиваем видео.
+    const link = text && text.match(VIDEO_URL);
+    if (link) {
+      ctx.waitUntil(
+        getContainer(env.DOWNLOADER).fetch("http://container/download", {
+          method: "POST",
+          body: JSON.stringify({ chat_id: msg.chat.id, message_id: msg.message_id, url: link[0] }),
+        }),
+      );
+      return new Response("ok");
+    }
     const c = t && t.query.match(COORDS);
     if (c) {
       const phrase = c[1].trim();
