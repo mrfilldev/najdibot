@@ -1,3 +1,4 @@
+import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
 // Inline-бот: на @najdibot <запрос> отдаёт ссылки поиска по площадкам.
@@ -289,6 +290,19 @@ const HELP = [
   "<i>В личке пиши запрос без триггера.</i>",
 ].join("\n");
 
+// «ГАВ ГАВ ГАВ» (три и больше «гав» подряд) — отвечаем голосовым из файла.
+const GAV_CALL = /^(?:гав[\s,.!?-]*){3,}$/i;
+
+async function sendGav(env, msg) {
+  const bytes = Uint8Array.from(atob(GAV_OGG_B64), (c) => c.charCodeAt(0));
+  const form = new FormData();
+  form.set("chat_id", String(msg.chat.id));
+  form.set("reply_to_message_id", String(msg.message_id));
+  form.set("duration", String(GAV_DURATION));
+  form.set("voice", new Blob([bytes], { type: "audio/ogg" }), "gav.ogg");
+  await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendVoice`, { method: "POST", body: form });
+}
+
 const PLAY = /^сыграйбля[\s,:;!.-]+(.{2,})$/is;
 const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
 
@@ -339,6 +353,10 @@ export default {
     const t = text && !text.startsWith("/")
       ? (parseTrigger(text) || (isPrivate ? { cats: CATEGORIES, query: text } : null))
       : null;
+    if (text && GAV_CALL.test(text)) {
+      await sendGav(env, msg);
+      return new Response("ok");
+    }
     // Сообщение от чужого бота (или через его inline) — посылаем.
     const other = msg?.from?.is_bot ? msg.from : msg?.via_bot;
     if (other && shouldRoast(msg.chat.id, other.id)) {
