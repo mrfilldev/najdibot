@@ -59,6 +59,20 @@ function buildResults(query) {
   }));
 }
 
+async function reply(env, msg, text) {
+  await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      chat_id: msg.chat.id,
+      reply_parameters: { message_id: msg.message_id },
+      text,
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    }),
+  });
+}
+
 export default {
   async fetch(request, env) {
     if (request.method !== "POST") return new Response("ok");
@@ -84,23 +98,21 @@ export default {
     }
 
     const msg = update.message;
-    const m = msg?.text && msg.text.trim().match(TRIGGER);
-    if (m) {
+    const text = msg?.text?.trim();
+    const isPrivate = msg?.chat.type === "private";
+    if (isPrivate && text && /^\/(start|help)\b/i.test(text)) {
+      await reply(env, msg, "Пиши, что искать, и я дам ссылки на Ozon, Wildberries, Маркет, DNS и Авито.\n" +
+        "В любом чате работает и так: <code>@najdibot запрос</code>. В группах: <code>найдибля запрос</code>.");
+      return new Response("ok");
+    }
+    // В личке любой текст — запрос, в группах нужен триггер.
+    const m = text && (isPrivate ? [null, text.replace(/^найдибля[\s,:;!.-]*/i, "") || text] : text.match(TRIGGER));
+    if (m && m[1].length >= 2 && !text.startsWith("/")) {
       const query = m[1].trim();
       const rude = RUDE.test(query);
-      await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          chat_id: msg.chat.id,
-          reply_parameters: { message_id: msg.message_id },
-          text: rude
-            ? JOKES[Math.floor(Math.random() * JOKES.length)]
-            : `Ищу «${esc(query)}»:\n${linksText(query)}`,
-          parse_mode: "HTML",
-          link_preview_options: { is_disabled: true },
-        }),
-      });
+      await reply(env, msg, rude
+        ? JOKES[Math.floor(Math.random() * JOKES.length)]
+        : `Ищу «${esc(query)}»:\n${linksText(query)}`);
     }
     return new Response("ok");
   },
