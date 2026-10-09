@@ -72,9 +72,9 @@ export async function decide(env, rows, forced, replied = null) {
     signal: AbortSignal.timeout(25_000),
     body: JSON.stringify({
       model: env.LLM_MODEL,
-      max_tokens: 400,
+      max_tokens: forced ? 900 : 400,
       messages: [
-        { role: "system", content: forced ? `${SYSTEM}\n\nСейчас разрешено только действие text: {"action":"text","text":"реплика"}.` : SYSTEM },
+        { role: "system", content: forced ? `${SYSTEM}\n\nСейчас разрешено только действие text: {"action":"text","text":"реплика"}. Правило про «1-2 фразы» тут НЕ действует: на прямое обращение отвечай развёрнуто, 3-6 предложений (до 900 символов). Если обращаются ответом на сообщение (новость, пост, фото), разбери его по существу: назови 1-2 конкретных пункта оттуда, выскажи свою позицию, обыграй мемом или чёрным юмором и закончи подколкой или встречным вопросом. Не ограничивайся общими шутками про заголовок.` : SYSTEM },
         { role: "user", content },
       ],
     }),
@@ -121,7 +121,7 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
     const rep = msg.reply_to_message;
     const replied = rep && {
       name: rep.from?.first_name || rep.from?.username || "кто-то",
-      text: (rep.text || rep.caption || "").slice(0, 500),
+      text: (rep.text || rep.caption || "").slice(0, forced ? 3500 : 500),
       image: rep.photo ? await photoDataUrl(env, rep.photo) : null,
     };
     const rows = await history(env, chatId);
@@ -145,7 +145,7 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
       return true;
     }
     if (d.action === "text" && d.text) {
-      const text = String(d.text).slice(0, 600);
+      const text = String(d.text).slice(0, forced ? 1500 : 600);
       await tg("sendMessage", forced
         ? { chat_id: chatId, text, reply_parameters: { message_id: msg.message_id } }
         : { chat_id: chatId, text });
