@@ -673,13 +673,25 @@ export async function relationPrompt(env, chatId, userId, name) {
 }
 
 export async function feelingsStatus(env, chatId) {
-  const { results } = await env.DB.prepare("SELECT user_id, name, score, note, updated FROM feelings WHERE chat_id=?").bind(chatId).all().catch(() => ({ results: [] }));
-  const rows = results.map((r) => {
+  const { results: fs } = await env.DB.prepare("SELECT user_id, name, score, note, updated FROM feelings WHERE chat_id=?").bind(chatId).all().catch(() => ({ results: [] }));
+  const { results: people } = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id!=0 GROUP BY user_id").bind(chatId).all().catch(() => ({ results: [] }));
+  const byId = new Map();
+  for (const p of people) byId.set(p.user_id, { name: p.name, score: 0, note: "" });
+  for (const r of fs) {
     const days = Math.floor((Date.now() / 1000 - r.updated) / 86400);
-    return { ...r, score: r.score > 0 ? Math.max(0, r.score - days) : Math.min(0, r.score + days) };
-  }).filter((r) => r.score !== 0).sort((a, b) => b.score - a.score);
-  if (!rows.length) return "Ко всем отношусь ровно, пока никто не отличился.";
-  return "Мои отношения с людьми:\n" + rows.map((r) => `${r.score > 0 ? "+" : ""}${r.score} ${r.name}: ${FEEL_WORDS(r.score)}${r.note ? `, ${r.note}` : ""}`).join("\n");
+    const score = r.score > 0 ? Math.max(0, r.score - days) : Math.min(0, r.score + days);
+    byId.set(r.user_id, { name: r.name, score, note: r.note });
+  }
+  const all = [...byId.values()];
+  const line = (r) => `${r.score > 0 ? "+" : ""}${r.score} ${r.name}: ${FEEL_WORDS(r.score)}${r.note ? `, ${r.note}` : ""}`;
+  const loved = all.filter((r) => r.score > 0).sort((a, b) => b.score - a.score);
+  const foes = all.filter((r) => r.score < 0).sort((a, b) => a.score - b.score);
+  const neutral = all.filter((r) => r.score === 0);
+  return [
+    `Любимчики:\n${loved.length ? loved.map(line).join("\n") : "никого"}`,
+    `Враги:\n${foes.length ? foes.map(line).join("\n") : "никого"}`,
+    `Нейтрально:\n${neutral.length ? neutral.map((r) => r.name).join(", ") : "никого"}`,
+  ].join("\n\n");
 }
 
 // Модель оценивает, как отношение к людям изменилось по недавней переписке; применяем до 3 сдвигов по ±1.
