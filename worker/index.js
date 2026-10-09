@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { MEME_HINT, POKE_RE, POKE_STOP, casinoLine, digest, forget, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { ALIAS_RE, MEME_HINT, POKE_RE, POKE_STOP, casinoLine, digest, forget, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -296,7 +296,7 @@ const HELP = [
   "<code>депни в казик</code> — крутану автомат 🎰: проиграл — погорюю, выиграл — оскорблю кого-нибудь из чата",
   "<code>/сводка</code> — юмористическая сводка чата за 12 часов (и сам пришлю её в 18:00 и в полночь)",
   "<b>Для админов</b> (ответом на сообщение, бот должен быть админом): <code>/mute [мин]</code>, <code>/unmute</code>, <code>/ban</code>, <code>/unban</code>, <code>/kick</code>, <code>/del</code>, <code>/warn</code> (3 = мьют на час), <code>/unwarn</code>, <code>/warns</code>",
-  "<code>@najdibot доебись до Кирилла</code> (или ответом на сообщение, или «до кого-нибудь») — пристану к человеку и поболтаю с ним; <code>@najdibot отстань</code> — отвалю",
+  "<code>Санни доебись до Кирилла</code> (или @najdibot, Саныч, Sunny; можно ответом на сообщение или «до кого-нибудь») — пристану к человеку и поболтаю с ним; <code>Санни отстань</code> — отвалю",
   "В группах иногда лаю: ГАВ",
   "В группах читаю чат, сам иногда вставляю слово, реакцию или мем с Reddit. Позови: @najdibot. <code>/forget</code> — стереть всё, что я помню о тебе",
   "",
@@ -623,7 +623,7 @@ export default {
     }
     // Ни один триггер не сработал: участвуем в беседе (если обратились — всегда), иначе иногда лаем.
     if (text && !isPrivate && !text.startsWith("/")) {
-      const ownUsername = /@najdibot\b/i.test(text);
+      const ownUsername = ALIAS_RE.test(text); // @najdibot, найдибот, Санни, Sunny, Саныч…
       const toUs = msg.reply_to_message?.from?.id === ownId;
       if (await maybeChat(env, msg, (m, b) => tg(env, m, b), { forced: ownUsername || toUs })) {
         return new Response("ok");
