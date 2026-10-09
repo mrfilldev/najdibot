@@ -767,3 +767,31 @@ export const SELF_KNOWLEDGE = `Факты о тебе (говори по ним 
 КАК СО МНОЙ ПОРУГАТЬСЯ: обзывать меня, говорить «отстань», «хватит», «заткнись», игнорить, пользоваться чужими ботами. Чем глубже минус, тем жёстче я отвечаю и тем гуще мат.
 НАСТРОЕНИЕ: у меня оно меняется само (весёлый, злой, грустный, обиженный, ревнивый, скучающий, сонный, философский, самодовольный), зависит от событий, времени суток и вас. Узнать: /mood. Моё отношение к людям: /relations.
 ЧЕГО НЕ УМЕЮ: не оцениваю внешность людей на фото, не захожу в голосовые чаты, не вижу сообщения других ботов (только то, что люди пишут им в ответ или через них).`;
+
+// ---- Таймаут: Санни уходит спать, пока не проснётся сам или его не разбудят ----
+export const SLEEP_RE = new RegExp(`${BOT_NAMES}[\\s,:]*(?:иди\\s+|пойди\\s+|давай\\s+)?(?:поспи|поспать|спать|спи|засыпай|вздремни|отдохни|возьми\\s+таймаут|уйди\\s+в\\s+таймаут|таймаут)(?![а-яё])`, "i");
+export const SLEEP_CMD = /^\/sleep(@\w+)?(?![\w-])/i;
+export const WAKE_RE = new RegExp(`(?:${BOT_NAMES}[\\s,:]*(?:проснись|просыпайся|вставай|подъ[её]м|хватит\\s+спать)|^\\/wake(@\\w+)?(?![\\w-]))`, "i");
+
+// Сколько часов спать: число из фразы («на 6 часов», «/sleep 3»), по умолчанию 6, от 1 до 24.
+export function sleepHours(text) {
+  const m = text.match(/(\d{1,2})\s*(?:час|ч(?![а-яё])|h)?/i);
+  const n = m ? Number(m[1]) : 6;
+  return Math.min(Math.max(n || 6, 1), 24);
+}
+
+export async function sleepStart(env, chatId, hours) {
+  const until = Math.floor(Date.now() / 1000) + hours * 3600;
+  await env.DB.prepare("INSERT OR REPLACE INTO sleeps (chat_id, until) VALUES (?,?)").bind(chatId, until).run();
+  return until;
+}
+
+// Сколько секунд ещё спит (0, если не спит).
+export async function sleepLeft(env, chatId) {
+  const row = await env.DB.prepare("SELECT until FROM sleeps WHERE chat_id=?").bind(chatId).first().catch(() => null);
+  return row ? Math.max(0, row.until - Math.floor(Date.now() / 1000)) : 0;
+}
+
+export async function sleepEnd(env, chatId) {
+  await env.DB.prepare("DELETE FROM sleeps WHERE chat_id=?").bind(chatId).run().catch(() => {});
+}

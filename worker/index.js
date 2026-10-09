@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { ALIAS_RE, APOLOGY_RE, MEME_HINT, OVERBOARD, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { ALIAS_RE, APOLOGY_RE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, MEME_HINT, OVERBOARD, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -300,6 +300,7 @@ const HELP = [
   "<b>Для админов</b> (ответом на сообщение, бот должен быть админом): <code>/mute [мин]</code>, <code>/unmute</code>, <code>/ban</code>, <code>/unban</code>, <code>/kick</code>, <code>/del</code>, <code>/warn</code> (3 = мьют на час), <code>/unwarn</code>, <code>/warns</code>",
   "<code>Санни доебись до Кирилла</code> (или @najdibot, Саныч, Sunny; можно ответом на сообщение или «до кого-нибудь») — пристану к человеку и поболтаю с ним; <code>Санни отстань</code> — отвалю",
   "Если спросить меня по имени (<code>Санни, сколько стоит …</code>) или ответить мне на сообщение со ссылкой, я сам поищу в интернете и открою страницу",
+  "<code>Санни, поспи</code> или <code>/sleep 6</code> — уйдёт в таймаут на N часов (по умолчанию 6) и будет молчать; разбудить: <code>Санни, проснись</code> или <code>/wake</code>",
   "<code>/about</code> — Санни о себе: как часто, что умеет, как дружить и как поругаться (или спроси «Санни, расскажи о себе»)",
   "<code>/rules_of_doeb</code> — правила доёба",
   "<code>/relations</code> — как я отношусь к людям в чате (или спроси «Санни, как ты относишься к Дане?»)",
@@ -435,6 +436,7 @@ export default {
         .bind(since).all();
       for (const c of results) {
         try {
+          if ((await sleepLeft(env, c.chat_id)) > 0) continue; // спит: сводку не шлём
           const text = await digest(env, c.chat_id, 12);
           if (text) await tg(env, "sendMessage", { chat_id: c.chat_id, text });
         } catch (e) {
@@ -545,6 +547,31 @@ export default {
       await remember(env, msg.chat.id, msg.from.id, msg.from.first_name || msg.from.username || "аноним",
         msg.photo && (msg.caption || "").trim() ? `[фото] ${msg.caption}` : saved, msg.message_id, msg.from.username ?? null,
       ).catch((e) => console.error("remember", e.message));
+    }
+    // Таймаут: «Санни, поспи / возьми таймаут на 6 часов» или /sleep 6; разбудить: «Санни, проснись» или /wake.
+    // Пока он спит, молчит полностью, а на прямое обращение только ставит реакцию 😴.
+    if (isGroup && text) {
+      const left = await sleepLeft(env, msg.chat.id);
+      if (left > 0 && WAKE_RE.test(text)) {
+        await sleepEnd(env, msg.chat.id);
+        await setMood(env, msg.chat.id, "сонный", 3, "меня разбудили раньше времени");
+        await reply(env, msg, ["Ну и нахуя разбудили? Только лёг.", "Встал, встал. Если что, я ещё не проснулся нормально.", "Ладно, ладно, вернулся. Кто тут без меня скучал?"][Math.floor(Math.random() * 3)]);
+        return new Response("ok");
+      }
+      if (left === 0 && (SLEEP_RE.test(text) || SLEEP_CMD.test(text))) {
+        const hours = sleepHours(text.replace(SLEEP_RE, " ").replace(SLEEP_CMD, " "));
+        await sleepStart(env, msg.chat.id, hours);
+        await setMood(env, msg.chat.id, "сонный", 4, "ушёл спать по просьбе");
+        const h = `${hours} ${hours % 10 === 1 && hours !== 11 ? "час" : [2, 3, 4].includes(hours % 10) && ![12, 13, 14].includes(hours) ? "часа" : "часов"}`;
+        await reply(env, msg, [`Всё, ушёл спать на ${h}. Не будить. Хр-р-р…`, `Принято, беру таймаут на ${h}. Разбудить можно только словом «проснись», и то я буду злой.`, `Спокойной ночи, нахуй. Вернусь через ${h}.`][Math.floor(Math.random() * 3)]);
+        return new Response("ok");
+      }
+      if (left > 0) {
+        if (ALIAS_RE.test(text) || msg.reply_to_message?.from?.id === Number(env.BOT_TOKEN.split(":")[0])) {
+          await tg(env, "setMessageReaction", { chat_id: msg.chat.id, message_id: msg.message_id, reaction: [{ type: "emoji", emoji: "😴" }] }).catch(() => {});
+        }
+        return new Response("ok");
+      }
     }
     if (isGroup && text && /^\/(relations|отношения)(@\w+)?(?![\w-])/i.test(text)) {
       await reply(env, msg, esc(await feelingsStatus(env, msg.chat.id)));
