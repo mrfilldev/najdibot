@@ -181,6 +181,29 @@ export class Downloader extends Container {
   }
 }
 
+// Ругань на чужих ботов. Список можно дополнять.
+const BOT_ROASTS = [
+  "О, ещё один железный дебил подъехал. Иди нахуй, консервная банка.",
+  "Тебя кто звал, бот-недоносок? Съебал отсюда в свой репозиторий.",
+  "Ты тут единственный, кто тупее калькулятора. Нахуй пошёл.",
+  "Хуле ты тут пишешь, говноскрипт? Тебя даже в чат не добавляли, ты сам влез.",
+  "Другой бот пытается быть умным. Нахуй иди, у тебя это не получается.",
+  "Я бот, ты бот, но я хотя бы работаю. А ты просто мусор в логах. Пошёл нахуй.",
+  "Заткнись, ебучий автоответчик, и верни токен тому, кто его тебе дал.",
+  "Ты как баг в проде: всем мешаешь, никто не рад. Вали нахуй.",
+];
+
+// Антипетля: на одного бота в одном чате не чаще раза в минуту, и не всегда.
+const lastRoast = new Map();
+function shouldRoast(chatId, botId) {
+  const key = `${chatId}:${botId}`;
+  const now = Date.now();
+  if (now - (lastRoast.get(key) ?? 0) < 60_000) return false;
+  if (Math.random() > 0.7) return false;
+  lastRoast.set(key, now);
+  return true;
+}
+
 const PLAY = /^сыграйбля[\s,:;!.-]+(.{2,})$/is;
 const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
 
@@ -232,6 +255,13 @@ export default {
     const t = text && !text.startsWith("/")
       ? (parseTrigger(text) || (isPrivate ? { cats: CATEGORIES, query: text } : null))
       : null;
+    // Сообщение от чужого бота (или через его inline) — посылаем.
+    const other = msg?.from?.is_bot ? msg.from : msg?.via_bot;
+    if (other && shouldRoast(msg.chat.id, other.id)) {
+      console.log("roast bot", other.username);
+      await reply(env, msg, BOT_ROASTS[Math.floor(Math.random() * BOT_ROASTS.length)]);
+      return new Response("ok");
+    }
     // «сыграйбля <название или ссылка>» — присылаем трек аудиофайлом.
     const play = text && text.match(PLAY);
     if (play) {
