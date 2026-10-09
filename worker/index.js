@@ -230,6 +230,18 @@ async function llmRoast(env, botText, humanText) {
   }
 }
 
+// Пока идёт работа, держим в чате статус «печатает…» (Telegram гасит его через ~5 с, поэтому обновляем).
+async function withTyping(env, chatId, work) {
+  const ping = () => tg(env, "sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
+  ping();
+  const timer = setInterval(ping, 4000);
+  try {
+    return await work();
+  } finally {
+    clearInterval(timer);
+  }
+}
+
 const pickRoast = () => BOT_ROASTS[Math.floor(Math.random() * BOT_ROASTS.length)];
 
 // Антипетля: на одного бота в одном чате не чаще раза в минуту, и не всегда.
@@ -309,7 +321,7 @@ export default {
     const other = msg?.from?.is_bot ? msg.from : msg?.via_bot;
     if (other && shouldRoast(msg.chat.id, other.id)) {
       console.log("roast bot", other.username);
-      await reply(env, msg, esc((await llmRoast(env, msg.text || msg.caption)) ?? pickRoast()));
+      await reply(env, msg, esc((await withTyping(env, msg.chat.id, () => llmRoast(env, msg.text || msg.caption))) ?? pickRoast()));
       return new Response("ok");
     }
     // Человек ответил чужому боту: бот-автор виден в reply_to_message, ругаемся прямо под его сообщением.
@@ -319,7 +331,7 @@ export default {
       await tg(env, "sendMessage", {
         chat_id: msg.chat.id,
         reply_parameters: { message_id: target.message_id },
-        text: (await llmRoast(env, target.text || target.caption, msg.text)) ?? pickRoast(),
+        text: (await withTyping(env, msg.chat.id, () => llmRoast(env, target.text || target.caption, msg.text))) ?? pickRoast(),
       });
       return new Response("ok");
     }
