@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { ALIAS_RE, APOLOGY_RE, GENDER_HINT, PERSONA_HINT, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, MEME_HINT, OVERBOARD, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { ALIAS_RE, APOLOGY_RE, GENDER_HINT, NO_REPEAT, PERSONA_HINT, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, MEME_HINT, OVERBOARD, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -224,7 +224,7 @@ async function llmRoast(env, botText, humanText, botName = null, mood = "") {
               (mood ? mood + " " : "") + "Главный мотив: ты РЕВНУЕШЬ. Тебе обидно и горько, что люди пользуются этим ботом, а не тобой (ты Санни, он же Найдибот, Саныч). Ругай чужого бота и ревниво зови людей к себе: подчёркивай, чем ты лучше, что он тебя копирует и отбирает у тебя людей, и что пользоваться надо Санни. " +
               "Человека в чате не ругай (он твой, просто заблудился): обращайся к нему как к своему, а целься в бота-автора. " +
               (botName ? `Этот бот называется @${botName}: начни реплику с обращения к нему по имени («@${botName}, …») и дай явно понять, что ругаешь именно бота, а не человека, который им воспользовался. ` : "") +
-              "Никаких оскорблений по национальности, полу, вере, здоровью и подобному. Без вступлений и кавычек, только сама реплика. " + MEME_HINT + " " + OVERBOARD + " " + GENDER_HINT + " " + PERSONA_HINT,
+              "Никаких оскорблений по национальности, полу, вере, здоровью и подобному. Без вступлений и кавычек, только сама реплика. " + MEME_HINT + " " + OVERBOARD + " " + GENDER_HINT + " " + PERSONA_HINT + " " + NO_REPEAT,
           },
           {
             role: "user",
