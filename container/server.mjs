@@ -152,9 +152,116 @@ async function audio({ chat_id, message_id, query }) {
   }
 }
 
+// ---- Погода голосом: Open-Meteo -> LLM пишет реплику -> TTS (OpenRouter) -> ffmpeg (хрипота, тон выше) -> sendVoice ----
+const OR_KEY = process.env.OPENROUTER_API_KEY;
+const LLM = process.env.LLM_MODEL || "google/gemini-2.5-flash";
+const TTS_MODEL = "openai/gpt-audio-mini";
+const TTS_VOICE = "ash"; // голос потоньше, чем onyx
+const PITCH = 1.12; // подъём тона (1 = без изменений)
+
+const WMO = {
+  0: "ясно", 1: "почти ясно", 2: "переменная облачность", 3: "пасмурно", 45: "туман", 48: "туман с изморозью",
+  51: "морось", 53: "морось", 55: "сильная морось", 61: "небольшой дождь", 63: "дождь", 65: "сильный дождь",
+  71: "небольшой снег", 73: "снег", 75: "сильный снег", 80: "ливни", 81: "сильные ливни", 82: "очень сильные ливни",
+  95: "гроза", 96: "гроза с градом", 99: "сильная гроза с градом",
+};
+
+const STYLE = `Ты пишешь реплику для озвучки: грубый уличный парень отвечает на вопрос о погоде. Стиль:
+- быстрый рваный говор, почти после каждого слова или короткой фразы матерная вставка-паразит («нахуй», «блядь»);
+- начни с обращения («Слышь…») и вопроса-вызова, мол, сам в окно выглянуть не можешь;
+- назови город, температуру, как ощущается, ветер и осадки по данным ниже, числа пиши словами;
+- закончи коротким приказом и «понял?».
+Длина 40-60 слов. Только текст реплики, без кавычек и пояснений. Без оскорблений по национальности, полу, вере и здоровью.`;
+
+async function weatherLine({ city, lat, lon }) {
+  const w = await (await fetch(
+    `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,wind_speed_10m,precipitation,weather_code&timezone=auto`,
+    { signal: AbortSignal.timeout(10_000) },
+  )).json();
+  const c = w.current;
+  const facts = `Город: ${city}. Температура ${Math.round(c.temperature_2m)} градусов, ощущается как ${Math.round(c.apparent_temperature)}. ` +
+    `Ветер ${Math.round(c.wind_speed_10m)} км/ч. Осадки: ${c.precipitation} мм. Небо: ${WMO[c.weather_code] ?? "непонятно что"}.`;
+  try {
+    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${OR_KEY}`, "content-type": "application/json" },
+      signal: AbortSignal.timeout(20_000),
+      body: JSON.stringify({
+        model: LLM, max_tokens: 300,
+        messages: [{ role: "system", content: STYLE }, { role: "user", content: facts }],
+      }),
+    });
+    const text = (await r.json()).choices?.[0]?.message?.content?.trim();
+    if (text) return text;
+  } catch (e) {
+    console.error("weather llm failed:", e.message);
+  }
+  // запасной вариант без LLM
+  return `Слышь, ты чё, нахуй, в окно выглянуть не можешь, блядь? ${city}, нахуй, ${Math.round(c.temperature_2m)} градусов, блядь, ` +
+    `ощущается как ${Math.round(c.apparent_temperature)}, ${WMO[c.weather_code] ?? "хрен поймёшь"}, нахуй. Одевайся нормально, понял?`;
+}
+
+// Озвучка через OpenRouter: поток SSE с pcm16 (24 кГц, моно).
+async function ttsPcm(text) {
+  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: `Bearer ${OR_KEY}`, "content-type": "application/json" },
+    signal: AbortSignal.timeout(60_000),
+    body: JSON.stringify({
+      model: TTS_MODEL, stream: true, modalities: ["text", "audio"],
+      audio: { voice: TTS_VOICE, format: "pcm16" },
+      messages: [
+        { role: "system", content: "Ты озвучиваешь текст. Говори по-русски быстро, грубо и нагло, как уличный парень. Произнеси текст пользователя дословно, ничего не добавляя и не пропуская." },
+        { role: "user", content: text },
+      ],
+    }),
+  });
+  const chunks = [];
+  for (const line of (await r.text()).split("\n")) {
+    if (!line.startsWith("data: ") || line.includes("[DONE]")) continue;
+    try {
+      const a = JSON.parse(line.slice(6)).choices?.[0]?.delta?.audio;
+      if (a?.data) chunks.push(Buffer.from(a.data, "base64"));
+    } catch {}
+  }
+  const pcm = Buffer.concat(chunks);
+  if (!pcm.length) throw new Error("TTS: пустой звук");
+  return pcm;
+}
+
+async function weather({ chat_id, message_id, city, lat, lon }) {
+  const dir = await mkdtemp(path.join(tmpdir(), "wx-"));
+  try {
+    await tg("sendChatAction", { chat_id, action: "record_voice" });
+    const text = await weatherLine({ city, lat, lon });
+    const pcmFile = path.join(dir, "in.pcm");
+    const ogg = path.join(dir, "out.ogg");
+    writeFileSync(pcmFile, await ttsPcm(text));
+    // тон выше (asetrate + возврат темпа), хрипота, компрессия, громкость -> opus для голосового
+    await run("ffmpeg", [
+      "-y", "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", pcmFile,
+      "-af", `asetrate=24000*${PITCH},aresample=48000,atempo=${(1 / PITCH * 1.05).toFixed(3)},highpass=f=100,acrusher=bits=11:mode=log:mix=0.2,acompressor=threshold=-18dB:ratio=4,loudnorm=I=-16`,
+      "-c:a", "libopus", "-b:a", "40k", "-ac", "1", ogg,
+    ]);
+    const dur = Math.round(parseFloat(await out("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", ogg])));
+    const form = new FormData();
+    form.set("chat_id", String(chat_id));
+    form.set("reply_to_message_id", String(message_id));
+    form.set("duration", String(dur));
+    form.set("voice", await openAsBlob(ogg, { type: "audio/ogg" }), "weather.ogg");
+    const r = await fetch(`${API}/sendVoice`, { method: "POST", body: form });
+    if (!r.ok) throw new Error(`Telegram: ${r.status} ${(await r.text()).slice(0, 200)}`);
+  } catch (e) {
+    console.error("weather failed:", e.message);
+    await tg("sendMessage", { chat_id, reply_parameters: { message_id }, text: "Не смог озвучить погоду, глянь в окно." });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 http
   .createServer((req, res) => {
-    const handler = { "/download": download, "/audio": audio }[req.url];
+    const handler = { "/download": download, "/audio": audio, "/weather": weather }[req.url];
     if (req.method !== "POST" || !handler) {
       res.writeHead(200).end("ok");
       return;

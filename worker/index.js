@@ -180,7 +180,12 @@ export class Downloader extends Container {
   sleepAfter = "10m";
   constructor(ctx, env) {
     super(ctx, env);
-    this.envVars = { BOT_TOKEN: env.BOT_TOKEN, YT_COOKIES_GZB64: env.YT_COOKIES_GZB64 ?? "" };
+    this.envVars = {
+      BOT_TOKEN: env.BOT_TOKEN,
+      YT_COOKIES_GZB64: env.YT_COOKIES_GZB64 ?? "",
+      OPENROUTER_API_KEY: env.OPENROUTER_API_KEY ?? "",
+      LLM_MODEL: env.LLM_MODEL ?? "",
+    };
   }
 }
 
@@ -309,6 +314,20 @@ async function sendVoice(env, msg, b64, duration, name) {
 const sendGav = (env, msg) => sendVoice(env, msg, GAV_OGG_B64, GAV_DURATION, "gav.ogg");
 
 // Голосовое отвечает только на эту фразу («а робот может сочинить симфонию?»), в любом чате.
+// «какая щас погода в Москве» — голосовой ответ (Open-Meteo + LLM + озвучка в контейнере).
+const WEATHER = /погод\S*\s+(?:сейчас\s+|щас\s+|сегодня\s+)?(?:в|во)\s+([а-яё-]+)/i;
+const CITIES = [
+  ["москв", 55.7558, 37.6173, "Москва"],
+  ["питер", 59.9343, 30.3351, "Санкт-Петербург"],
+  ["петербург", 59.9343, 30.3351, "Санкт-Петербург"],
+  ["казан", 55.7887, 49.1221, "Казань"],
+  ["екатеринбург", 56.8389, 60.6057, "Екатеринбург"],
+  ["новосибирск", 55.0084, 82.9357, "Новосибирск"],
+  ["сочи", 43.5855, 39.7231, "Сочи"],
+  ["краснодар", 45.0355, 38.9753, "Краснодар"],
+];
+const lastWeather = new Map();
+
 const SYMPHONY = /робот\s+может\s+сочинить\s+симфони/i;
 
 const PLAY = /^сыграйбля[\s,:;!.-]+(.{2,})$/is;
@@ -380,6 +399,18 @@ export default {
     const t = text && !text.startsWith("/")
       ? (parseTrigger(text) || (isPrivate ? { cats: CATEGORIES, query: text } : null))
       : null;
+    const wm = text && text.match(WEATHER);
+    const city = wm && CITIES.find(([stem]) => wm[1].toLowerCase().startsWith(stem));
+    if (city && Date.now() - (lastWeather.get(msg.chat.id) ?? 0) > 20_000) {
+      lastWeather.set(msg.chat.id, Date.now());
+      ctx.waitUntil(
+        getContainer(env.DOWNLOADER).fetch("http://container/weather", {
+          method: "POST",
+          body: JSON.stringify({ chat_id: msg.chat.id, message_id: msg.message_id, city: city[3], lat: city[1], lon: city[2] }),
+        }),
+      );
+      return new Response("ok");
+    }
     if (text && SYMPHONY.test(text)) {
       await sendVoice(env, msg, INSULT_OGG_B64, INSULT_DURATION, "symphony.ogg");
       return new Response("ok");
