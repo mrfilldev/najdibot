@@ -465,7 +465,7 @@ export default {
     const saved = (msg?.text || msg?.caption || (msg?.photo ? "[фото]" : "")).trim();
     if (isGroup && saved && !saved.startsWith("/") && !msg.from?.is_bot) {
       await remember(env, msg.chat.id, msg.from.id, msg.from.first_name || msg.from.username || "аноним",
-        msg.photo && (msg.caption || "").trim() ? `[фото] ${msg.caption}` : saved, msg.message_id,
+        msg.photo && (msg.caption || "").trim() ? `[фото] ${msg.caption}` : saved, msg.message_id, msg.from.username ?? null,
       ).catch((e) => console.error("remember", e.message));
     }
     if (text && /^\/(start|help)(@\w+)?\b/i.test(text)) {

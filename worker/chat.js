@@ -28,11 +28,11 @@ const SYSTEM = `Ты — Найдибот, участник дружеского
 
 const pick = (a) => a[Math.floor(Math.random() * a.length)];
 
-export async function remember(env, chatId, userId, name, text, messageId = null) {
+export async function remember(env, chatId, userId, name, text, messageId = null, username = null) {
   text = (text || "").trim();
   if (!text || !env.DB) return;
-  await env.DB.prepare("INSERT INTO messages (chat_id, message_id, user_id, name, text, ts) VALUES (?,?,?,?,?,?)")
-    .bind(chatId, messageId, userId, name, text.slice(0, 500), Math.floor(Date.now() / 1000))
+  await env.DB.prepare("INSERT INTO messages (chat_id, message_id, user_id, name, text, ts, username) VALUES (?,?,?,?,?,?,?)")
+    .bind(chatId, messageId, userId, name, text.slice(0, 500), Math.floor(Date.now() / 1000), username)
     .run();
   if (Math.random() < 0.02) {
     await env.DB.prepare("DELETE FROM messages WHERE chat_id=? AND id NOT IN (SELECT id FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT ?)")
@@ -286,8 +286,18 @@ export async function poke(env, tg, msg, arg) {
   const { results: people } = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id!=0 GROUP BY user_id").bind(chatId).all();
   let target = null;
   const rep = msg.reply_to_message?.from;
+  // упоминание без ника (text_mention) сразу даёт пользователя
+  const tm0 = (msg.entities ?? []).find((e) => e.type === "text_mention" && e.user && !e.user.is_bot);
+  const um = arg?.match(/@([A-Za-z0-9_]{4,})/);
   if (rep && !rep.is_bot) target = { user_id: rep.id, name: rep.first_name || rep.username || "эй ты" };
-  else if (arg && /(кого[- ]?нибудь|кого угодно|любого|рандом|случайн)/i.test(arg)) {
+  else if (tm0) target = { user_id: tm0.user.id, name: tm0.user.first_name || "эй ты" };
+  else if (um && um[1].toLowerCase() !== "najdibot") {
+    target = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND lower(username)=lower(?) ORDER BY id DESC LIMIT 1").bind(chatId, um[1]).first();
+    if (!target) {
+      await say("Этого ника я ещё не видел. Пусть он что-нибудь напишет в чат или ответь этой командой на его сообщение.");
+      return true;
+    }
+  } else if (arg && /(кого[- ]?нибудь|кого угодно|любого|рандом|случайн)/i.test(arg)) {
     const others = people.filter((p) => p.user_id !== msg.from.id);
     target = others.length ? others[Math.floor(Math.random() * others.length)] : null;
   } else if (arg) target = matchName(arg, people);
