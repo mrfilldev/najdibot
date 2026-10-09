@@ -10,7 +10,7 @@ export const OVERBOARD = `Не сдерживайся: гипербола, аб�
 const REACTIONS = ["👍", "👎", "🔥", "😁", "🤔", "🤯", "😱", "🤡", "💩", "🥱", "🤣", "💯", "🗿", "👀", "😭", "🤨", "👏", "🤓", "😎", "🥴"];
 const MEME_SUBS = ["memes", "dankmemes", "ProgrammerHumor", "me_irl", "wholesomememes", "funny"];
 
-const CHANCE = 0.1; // «средне»: примерно каждое 10-е сообщение
+const CHANCE = 0.02; // редко: примерно каждое 50-е сообщение
 const COOLDOWN = 60_000; // между самопроизвольными вбросами в одном чате
 const COOLDOWN_FORCED = 1_500; // когда обратились напрямую
 const CONTEXT = 40; // сколько последних сообщений видит модель
