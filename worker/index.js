@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { ALIAS_RE, MEME_HINT, OVERBOARD, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoActive, forget, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { ALIAS_RE, MEME_HINT, OVERBOARD, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -656,10 +656,10 @@ export default {
     if (text && !isPrivate && !text.startsWith("/")) {
       const ownUsername = ALIAS_RE.test(text); // @najdibot, найдибот, Санни, Sunny, Саныч…
       const toUs = msg.reply_to_message?.from?.id === ownId;
-      // Идёт живой диалог с этим человеком: реплика без имени тоже считается обращением (кроме ответов другим людям).
+      // Недавно говорили с этим человеком: LLM решает по смыслу, к боту ли его реплика без имени (ответы другим людям пропускаем сразу).
       const addressed = ownUsername || toUs;
       const toSomeoneElse = msg.reply_to_message && msg.reply_to_message.from?.id !== ownId;
-      const inConvo = !addressed && !toSomeoneElse && (await convoActive(env, msg.chat.id, msg.from.id).catch(() => false));
+      const inConvo = !addressed && !toSomeoneElse && (await convoRecent(env, msg.chat.id, msg.from.id).catch(() => false)) && (await isForBot(env, msg));
       // Просят отстать (ответом на бота, по имени или посреди диалога): сворачиваемся одной фразой и гасим доёб на этого человека.
       if ((addressed || inConvo) && POKE_QUIT.test(text)) {
         await env.DB.prepare("DELETE FROM pokes WHERE chat_id=? AND user_id=?").bind(msg.chat.id, msg.from.id).run().catch(() => {});

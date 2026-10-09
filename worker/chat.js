@@ -475,19 +475,41 @@ export async function pokeStop(env, chatId) {
   return r.meta?.changes ?? 0;
 }
 
-// ---- Живой диалог: после ответа человеку бот ещё немного слушает его без имени ----
-const CONVO_SECONDS = 180;
-const CONVO_TURNS = 4;
+// ---- Живой диалог: после ответа человеку бот решает по смыслу, к нему ли следующая реплика ----
+const CONVO_SECONDS = 600; // окно-предохранитель: проверяем только в течение 10 минут после ответа
 
 export async function convoTouch(env, chatId, userId) {
   const until = Math.floor(Date.now() / 1000) + CONVO_SECONDS;
-  await env.DB.prepare("INSERT OR REPLACE INTO convos (chat_id, user_id, until, left) VALUES (?,?,?,?)").bind(chatId, userId, until, CONVO_TURNS).run();
+  await env.DB.prepare("INSERT OR REPLACE INTO convos (chat_id, user_id, until, left) VALUES (?,?,?,?)").bind(chatId, userId, until, 0).run();
 }
 
-// true, если с этим человеком идёт диалог; тратит один ход.
-export async function convoActive(env, chatId, userId) {
-  const row = await env.DB.prepare("SELECT until, left FROM convos WHERE chat_id=? AND user_id=?").bind(chatId, userId).first();
-  if (!row || row.until < Math.floor(Date.now() / 1000) || row.left <= 0) return false;
-  await env.DB.prepare("UPDATE convos SET left=left-1 WHERE chat_id=? AND user_id=?").bind(chatId, userId).run();
-  return true;
+// Был ли недавно разговор бота с этим человеком (кандидат на проверку смысла).
+export async function convoRecent(env, chatId, userId) {
+  const row = await env.DB.prepare("SELECT until FROM convos WHERE chat_id=? AND user_id=?").bind(chatId, userId).first();
+  return !!row && row.until >= Math.floor(Date.now() / 1000);
+}
+
+// LLM решает: реплика продолжает разговор с ботом или обращена к другим / общая.
+export async function isForBot(env, msg) {
+  if (!env.OPENROUTER_API_KEY) return false;
+  const rows = (await history(env, msg.chat.id)).slice(-9);
+  const name = msg.from?.first_name || "участник";
+  const text = (msg.text || msg.caption || "").slice(0, 500);
+  const log = rows.map((r) => `${r.name}: ${r.text}`).join("\n");
+  const sys = "Ты определяешь, к кому обращено последнее сообщение в групповом чате. Участник только что разговаривал с ботом Найдиботом (его зовут также Санни, Саныч, Саня). Ответь BOT, если последнее сообщение логично продолжает разговор с ботом (реакция на его реплику, ответ на его вопрос, просьба или вопрос, которые адресованы ему), и OTHER, если оно адресовано другим людям, является общей репликой не про бота или началом новой темы для всех. Ответ одним словом: BOT или OTHER.";
+  try {
+    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
+      signal: AbortSignal.timeout(8_000),
+      body: JSON.stringify({ model: env.LLM_MODEL, max_tokens: 5, temperature: 0, messages: [{ role: "system", content: sys }, { role: "user", content: `Последние сообщения:\n${log}\n\nПоследнее сообщение от ${name}: ${text}\n\nК кому оно обращено?` }] }),
+    });
+    const out = (await r.json()).choices?.[0]?.message?.content ?? "";
+    const yes = /BOT/i.test(out) && !/OTHER/i.test(out);
+    if (yes) await convoTouch(env, msg.chat.id, msg.from.id).catch(() => {});
+    return yes;
+  } catch (e) {
+    console.error("isForBot failed:", e.message);
+    return false;
+  }
 }
