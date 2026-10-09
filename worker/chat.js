@@ -244,6 +244,7 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
         ? { chat_id: chatId, text, reply_parameters: { message_id: msg.message_id } }
         : { chat_id: chatId, text });
       await remember(env, chatId, 0, "Найдибот", text);
+      if (forced) await convoTouch(env, chatId, msg.from.id).catch(() => {});
       return true;
     }
   } catch (e) {
@@ -472,4 +473,21 @@ export async function pokeContinue(env, tg, msg) {
 export async function pokeStop(env, chatId) {
   const r = await env.DB.prepare("DELETE FROM pokes WHERE chat_id=?").bind(chatId).run();
   return r.meta?.changes ?? 0;
+}
+
+// ---- Живой диалог: после ответа человеку бот ещё немного слушает его без имени ----
+const CONVO_SECONDS = 180;
+const CONVO_TURNS = 4;
+
+export async function convoTouch(env, chatId, userId) {
+  const until = Math.floor(Date.now() / 1000) + CONVO_SECONDS;
+  await env.DB.prepare("INSERT OR REPLACE INTO convos (chat_id, user_id, until, left) VALUES (?,?,?,?)").bind(chatId, userId, until, CONVO_TURNS).run();
+}
+
+// true, если с этим человеком идёт диалог; тратит один ход.
+export async function convoActive(env, chatId, userId) {
+  const row = await env.DB.prepare("SELECT until, left FROM convos WHERE chat_id=? AND user_id=?").bind(chatId, userId).first();
+  if (!row || row.until < Math.floor(Date.now() / 1000) || row.left <= 0) return false;
+  await env.DB.prepare("UPDATE convos SET left=left-1 WHERE chat_id=? AND user_id=?").bind(chatId, userId).run();
+  return true;
 }

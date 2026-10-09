@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { ALIAS_RE, MEME_HINT, OVERBOARD, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, forget, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { ALIAS_RE, MEME_HINT, OVERBOARD, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoActive, forget, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -656,13 +656,17 @@ export default {
     if (text && !isPrivate && !text.startsWith("/")) {
       const ownUsername = ALIAS_RE.test(text); // @najdibot, найдибот, Санни, Sunny, Саныч…
       const toUs = msg.reply_to_message?.from?.id === ownId;
-      // Просят отстать (ответом на бота или по имени): сворачиваемся одной фразой и гасим доёб на этого человека.
-      if ((ownUsername || toUs) && POKE_QUIT.test(text)) {
+      // Идёт живой диалог с этим человеком: реплика без имени тоже считается обращением (кроме ответов другим людям).
+      const addressed = ownUsername || toUs;
+      const toSomeoneElse = msg.reply_to_message && msg.reply_to_message.from?.id !== ownId;
+      const inConvo = !addressed && !toSomeoneElse && (await convoActive(env, msg.chat.id, msg.from.id).catch(() => false));
+      // Просят отстать (ответом на бота, по имени или посреди диалога): сворачиваемся одной фразой и гасим доёб на этого человека.
+      if ((addressed || inConvo) && POKE_QUIT.test(text)) {
         await env.DB.prepare("DELETE FROM pokes WHERE chat_id=? AND user_id=?").bind(msg.chat.id, msg.from.id).run().catch(() => {});
         await reply(env, msg, POKE_BYE[Math.floor(Math.random() * POKE_BYE.length)]);
         return new Response("ok");
       }
-      if (await maybeChat(env, msg, (m, b) => tg(env, m, b), { forced: ownUsername || toUs })) {
+      if (await maybeChat(env, msg, (m, b) => tg(env, m, b), { forced: addressed || inConvo })) {
         return new Response("ok");
       }
       if (shouldBark(msg.chat.id)) {
