@@ -222,7 +222,7 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
     // ссылки из сообщения и из того, на которое ответили: открываем сразу (до двух), чтобы бот видел страницу, а не только адрес
     const urls = [...new Set([...(msg.text || "").matchAll(URL_RE), ...((rep?.text || rep?.caption || "").matchAll(URL_RE))].map((m) => m[0]))].slice(0, 2);
     const extra = forced && urls.length ? (await Promise.all(urls.map(async (u) => `[${u}]\n${await openUrl(u)}`))).join("\n\n").slice(0, 9000) : "";
-    const mood = await moodPrompt(env, chatId);
+    const mood = (await moodPrompt(env, chatId)) + (forced ? `\n${await relationPrompt(env, chatId, msg.from.id, msg.from?.first_name || "собеседник")}\n${await relationsSummary(env, chatId)}` : "");
     const asker = forced ? { name: msg.from?.first_name || msg.from?.username || "собеседник", text: (msg.text || msg.caption || "").slice(0, 700) } : null;
     let d = await decide(env, rows, forced, replied, extra, asker, mood).catch((e) => (console.error("decide", e.message), null));
     // На прямое обращение молчать нельзя: один повтор, потом запасная фраза.
@@ -417,7 +417,7 @@ export async function poke(env, tg, msg, arg) {
   const { results: tm } = await env.DB.prepare("SELECT text FROM messages WHERE chat_id=? AND user_id=? ORDER BY id DESC LIMIT 5").bind(chatId, target.user_id).all();
   const log = rows.slice(-15).map((r) => `${r.name}: ${r.text}`).join("\n");
   const ctx = `Цель: {who} (имя ${target.name}). Просит доебаться: ${msg.from.first_name || "кто-то из чата"}.\nЧто он писал недавно: ${tm.length ? tm.map((x) => `«${String(x.text).slice(0, 150)}»`).join("; ") : "ничего"}.\nПоследние сообщения чата:\n${log}\n\nНапиши реплику, обязательно используй {who} вместо имени (оно превратится в тег).`;
-  const line = (await ask(env, `${POKE_SYSTEM}\n\n${await moodPrompt(env, chatId)}`, ctx)) ?? POKE_FALLBACK[Math.floor(Math.random() * POKE_FALLBACK.length)];
+  const line = (await ask(env, `${POKE_SYSTEM}\n\n${await moodPrompt(env, chatId)}\n${await relationPrompt(env, chatId, target.user_id, target.name)}`, ctx)) ?? POKE_FALLBACK[Math.floor(Math.random() * POKE_FALLBACK.length)];
 
   const who = `<a href="tg://user?id=${target.user_id}">${esc2(target.name)}</a>`;
   const body = line.includes("{who}") ? line.split("{who}").map(esc2).join(who) : `${who}, ${esc2(line)}`;
@@ -468,7 +468,7 @@ export async function pokeContinue(env, tg, msg) {
     ctxExtra += `\nОн прислал фото${msg.caption ? ` с подписью «${msg.caption.slice(0, 500)}»` : ""}.`;
     image = await photoDataUrl(env, msg.photo);
   }
-  const line = await ask(env, `${sys}\n\n${await moodPrompt(env, chatId)}`, `Последние сообщения чата:\n${log}${ctxExtra}\n\nОтветь ${row.name}.`, 220, image);
+  const line = await ask(env, `${sys}\n\n${await moodPrompt(env, chatId)}\n${await relationPrompt(env, chatId, msg.from.id, row.name)}`, `Последние сообщения чата:\n${log}${ctxExtra}\n\nОтветь ${row.name}.`, 220, image);
   if (!line) return false;
   await tg("sendMessage", { chat_id: chatId, text: line.slice(0, 600), reply_parameters: { message_id: msg.message_id } });
   await remember(env, chatId, 0, "Найдибот", line);
@@ -553,11 +553,12 @@ async function reassessMood(env, chatId, prev) {
   const hour = new Date(Date.now() + 3 * 3600_000).getUTCHours(); // МСК
   const sys = `Ты психика бота Санни (он же Найдибот, Саныч). Реши, какое у него сейчас настроение, исходя из недавней переписки, прошлого настроения и времени суток. Варианты: ${Object.keys(MOODS).join(", ")}.
 Что на него влияет: оскорбления и «тупой бот» бесят или обижают, хвалят и общаются с ним по-доброму радует, игнор и тишина вгоняют в грусть или скуку, споры вокруг и шум бесят, разговоры о смысле жизни тянут в философию, ночью бывает сонным, упоминания других ботов вызывают ревность. Настроение должно меняться не слишком резко, но может, иногда без видимой причины.
-Верни ТОЛЬКО JSON: {"mood":"одно из вариантов","intensity":число от 1 до 5,"reason":"коротко от первого лица, до 60 символов"}.`;
+Заодно отметь, как изменилось твоё отношение к тем людям, кто явно повлиял на тебя (похвалил, обидел, рассмешил, надоел): максимум трое, сдвиг +1 или -1, заметка от первого лица (до 60 символов), имена бери ровно как в переписке.\nВерни ТОЛЬКО JSON: {"mood":"одно из вариантов","intensity":число от 1 до 5,"reason":"коротко от первого лица, до 60 символов","relations":[{"name":"имя","delta":1,"note":"почему"}]}.`;
   const user = `Прошлое настроение: ${prev ? `${prev.mood} (${prev.intensity}/5, причина: ${prev.reason})` : "нет"}.\nСейчас ${hour}:00 по Москве.\nПоследние сообщения:\n${rows.map((r) => `${r.name}: ${String(r.text).slice(0, 200)}`).join("\n") || "(тихо)"}`;
-  const out = await ask(env, sys, user, 120);
+  const out = await ask(env, sys, user, 260);
   try {
     const j = JSON.parse(out.match(/\{[\s\S]*\}/)[0]);
+    if (Array.isArray(j.relations)) await applyRelations(env, chatId, j.relations).catch(() => {});
     if (MOODS[j.mood]) return { mood: j.mood, intensity: Math.min(Math.max(j.intensity | 0, 1), 5), reason: String(j.reason || "без причины").slice(0, 100) };
   } catch {}
   return prev ?? { mood: "скучающий", intensity: 2, reason: "ничего не происходит" };
@@ -585,4 +586,63 @@ export async function moodStatus(env, chatId) {
   if (!m) return "Настроения пока нет.";
   const ago = Math.max(0, Math.round((Date.now() / 1000 - m.updated) / 60));
   return `Настроение Санни: ${m.mood}, ${m.intensity}/5. Причина: ${m.reason}. (обновлено ${ago} мин назад)`;
+}
+
+// ---- Отношение Санни к конкретным людям ----
+const FEEL_WORDS = (n) => (n >= 4 ? "обожает" : n >= 2 ? "нравится" : n >= 1 ? "скорее симпатичен" : n <= -4 ? "бесит до невозможности" : n <= -2 ? "дуется на него" : n <= -1 ? "слегка раздражает" : "нейтрально");
+
+// Отношение с затуханием к нулю: за каждые сутки без событий на единицу ближе к нейтральному.
+async function loadFeeling(env, chatId, userId) {
+  const row = await env.DB.prepare("SELECT name, score, note, updated FROM feelings WHERE chat_id=? AND user_id=?").bind(chatId, userId).first().catch(() => null);
+  if (!row) return null;
+  const days = Math.floor((Date.now() / 1000 - row.updated) / 86400);
+  const score = row.score > 0 ? Math.max(0, row.score - days) : Math.min(0, row.score + days);
+  return { ...row, score };
+}
+
+export async function bumpFeeling(env, chatId, userId, name, delta, note) {
+  if (!env.DB || !userId) return;
+  const cur = await loadFeeling(env, chatId, userId);
+  const score = Math.min(Math.max((cur?.score ?? 0) + delta, -5), 5);
+  await env.DB.prepare("INSERT OR REPLACE INTO feelings (chat_id, user_id, name, score, note, updated) VALUES (?,?,?,?,?,?)")
+    .bind(chatId, userId, name || cur?.name || "кто-то", score, String(note || cur?.note || "").slice(0, 100), Math.floor(Date.now() / 1000)).run().catch(() => {});
+}
+
+// Кусок промпта про отношение к собеседнику (пусто, если нейтрально и нечего сказать).
+export async function relationPrompt(env, chatId, userId, name) {
+  const f = await loadFeeling(env, chatId, userId).catch(() => null);
+  if (!f || (f.score === 0 && !f.note)) return "";
+  return `Твоё отношение к «${name}»: ${f.score > 0 ? "+" : ""}${f.score} (${FEEL_WORDS(f.score)})${f.note ? `, потому что ${f.note}` : ""}. К тем, кто нравится, подколки теплее и ты охотнее помогаешь; на тех, на кого дуешься, огрызаешься холоднее и с обидой. Это отношение личное, держи его в тоне, не пересказывай цифры.`;
+}
+
+export async function feelingsStatus(env, chatId) {
+  const { results } = await env.DB.prepare("SELECT user_id, name, score, note, updated FROM feelings WHERE chat_id=?").bind(chatId).all().catch(() => ({ results: [] }));
+  const rows = results.map((r) => {
+    const days = Math.floor((Date.now() / 1000 - r.updated) / 86400);
+    return { ...r, score: r.score > 0 ? Math.max(0, r.score - days) : Math.min(0, r.score + days) };
+  }).filter((r) => r.score !== 0).sort((a, b) => b.score - a.score);
+  if (!rows.length) return "Ко всем отношусь ровно, пока никто не отличился.";
+  return "Мои отношения с людьми:\n" + rows.map((r) => `${r.score > 0 ? "+" : ""}${r.score} ${r.name}: ${FEEL_WORDS(r.score)}${r.note ? `, ${r.note}` : ""}`).join("\n");
+}
+
+// Модель оценивает, как отношение к людям изменилось по недавней переписке; применяем до 3 сдвигов по ±1.
+export async function applyRelations(env, chatId, relations) {
+  if (!Array.isArray(relations)) return;
+  const { results: people } = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id!=0 GROUP BY user_id").bind(chatId).all();
+  for (const r of relations.slice(0, 3)) {
+    const p = people.find((x) => x.name === r?.name);
+    const d = Math.max(-1, Math.min(1, Number(r?.delta) | 0));
+    if (p && d !== 0) await bumpFeeling(env, chatId, p.user_id, p.name, d, r.note);
+  }
+}
+
+// Короткая сводка отношений ко всем людям чата: чтобы на «как ты относишься к Дане?» он отвечал по правде.
+export async function relationsSummary(env, chatId) {
+  const { results } = await env.DB.prepare("SELECT name, score, note, updated FROM feelings WHERE chat_id=?").bind(chatId).all().catch(() => ({ results: [] }));
+  const rows = results.map((r) => {
+    const days = Math.floor((Date.now() / 1000 - r.updated) / 86400);
+    return { ...r, score: r.score > 0 ? Math.max(0, r.score - days) : Math.min(0, r.score + days) };
+  }).filter((r) => r.score !== 0);
+  if (!rows.length) return "";
+  return `Твои личные отношения с людьми чата (от -5 до +5): ${rows.map((r) => `${r.name} ${r.score > 0 ? "+" : ""}${r.score} (${FEEL_WORDS(r.score)}${r.note ? `, ${r.note}` : ""})`).join("; ")}. Если тебя спросят, как ты к кому-то относишься, ответь честно по этим данным, в своём стиле и с причиной, словами, без цифр и без слов вроде «плюс два» или «минус два»; про тех, кого здесь нет, скажи, что особых чувств нет.`;
 }

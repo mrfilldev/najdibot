@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { ALIAS_RE, MEME_HINT, OVERBOARD, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { ALIAS_RE, MEME_HINT, OVERBOARD, bumpFeeling, feelingsStatus, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -301,6 +301,7 @@ const HELP = [
   "<code>Санни доебись до Кирилла</code> (или @najdibot, Саныч, Sunny; можно ответом на сообщение или «до кого-нибудь») — пристану к человеку и поболтаю с ним; <code>Санни отстань</code> — отвалю",
   "Если спросить меня по имени (<code>Санни, сколько стоит …</code>) или ответить мне на сообщение со ссылкой, я сам поищу в интернете и открою страницу",
   "<code>/rules_of_doeb</code> — правила доёба",
+  "<code>/relations</code> — как я отношусь к людям в чате (или спроси «Санни, как ты относишься к Дане?»)",
   "<code>/mood</code> — какое сейчас у меня настроение (оно меняется само: от событий, времени суток и вашего поведения)",
   "В группах иногда лаю: ГАВ",
   "В группах читаю чат, сам иногда вставляю слово, реакцию или мем с Reddit. Позови: @najdibot. <code>/forget</code> — стереть всё, что я помню о тебе",
@@ -512,6 +513,10 @@ export default {
         msg.photo && (msg.caption || "").trim() ? `[фото] ${msg.caption}` : saved, msg.message_id, msg.from.username ?? null,
       ).catch((e) => console.error("remember", e.message));
     }
+    if (isGroup && text && /^\/(relations|отношения)(@\w+)?(?![\w-])/i.test(text)) {
+      await reply(env, msg, esc(await feelingsStatus(env, msg.chat.id)));
+      return new Response("ok");
+    }
     if (text && /^\/(mood|настроение)(@\w+)?(?![\w-])/i.test(text)) {
       await reply(env, msg, esc(await moodStatus(env, msg.chat.id)));
       return new Response("ok");
@@ -577,8 +582,12 @@ export default {
         // выигрыш: случайный участник чата (кто писал), тег через tg://user работает и без username
         let target = null, targetMsgs = [];
         if (win) {
-          target = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id!=0 GROUP BY user_id ORDER BY RANDOM() LIMIT 1")
-            .bind(msg.chat.id).first().catch(() => null);
+          // мишень: случайный участник, но тех, на кого Санни дуется, он выбирает чаще (вес 1 + степень неприязни)
+          const { results: cands } = await env.DB.prepare("SELECT m.user_id, m.name, COALESCE(f.score, 0) AS score FROM (SELECT user_id, name FROM messages WHERE chat_id=? AND user_id!=0 GROUP BY user_id) m LEFT JOIN feelings f ON f.chat_id=? AND f.user_id=m.user_id")
+            .bind(msg.chat.id, msg.chat.id).all().catch(() => ({ results: [] }));
+          const w = cands.map((c) => 1 + Math.max(0, -c.score));
+          let roll = Math.random() * w.reduce((a, b) => a + b, 0);
+          target = cands.find((c, i) => (roll -= w[i]) < 0) ?? cands[0] ?? null;
           if (target) {
             const { results } = await env.DB.prepare("SELECT text FROM messages WHERE chat_id=? AND user_id=? ORDER BY id DESC LIMIT 3")
               .bind(msg.chat.id, target.user_id).all().catch(() => ({ results: [] }));
@@ -688,10 +697,15 @@ export default {
       const addressed = ownUsername || toUs;
       const toSomeoneElse = msg.reply_to_message && msg.reply_to_message.from?.id !== ownId;
       const inConvo = !addressed && !toSomeoneElse && (await convoRecent(env, msg.chat.id, msg.from.id).catch(() => false)) && (await isForBot(env, msg));
+      // Похвалили бота прямо в разговоре: отношение к человеку теплеет.
+      if ((addressed || inConvo) && /спасиб|молодец|красав|умниц|лучший|люблю тебя|ты крут|респект|обожаю/i.test(text)) {
+        await bumpFeeling(env, msg.chat.id, msg.from.id, msg.from.first_name, 1, "хвалил меня").catch(() => {});
+      }
       // Просят отстать (ответом на бота, по имени или посреди диалога): сворачиваемся одной фразой и гасим доёб на этого человека.
       if ((addressed || inConvo) && POKE_QUIT.test(text)) {
         await env.DB.prepare("DELETE FROM pokes WHERE chat_id=? AND user_id=?").bind(msg.chat.id, msg.from.id).run().catch(() => {});
         await setMood(env, msg.chat.id, "обиженный", 3, "послали, сказали отстать");
+        await bumpFeeling(env, msg.chat.id, msg.from.id, msg.from.first_name, -1, "послал меня отстать").catch(() => {});
         await reply(env, msg, POKE_BYE[Math.floor(Math.random() * POKE_BYE.length)]);
         return new Response("ok");
       }
