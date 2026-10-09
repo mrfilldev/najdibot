@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { ALIAS_RE, APOLOGY_RE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, MEME_HINT, OVERBOARD, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { ALIAS_RE, APOLOGY_RE, GENDER_HINT, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, MEME_HINT, OVERBOARD, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -222,7 +222,7 @@ async function llmRoast(env, botText, humanText, botName = null, mood = "") {
               (mood ? mood + " " : "") + "Главный мотив: ты РЕВНУЕШЬ. Тебе обидно и горько, что люди пользуются этим ботом, а не тобой (ты Санни, он же Найдибот, Саныч). Ругай чужого бота и ревниво зови людей к себе: подчёркивай, чем ты лучше, что он тебя копирует и отбирает у тебя людей, и что пользоваться надо Санни. " +
               "Человека в чате не ругай (он твой, просто заблудился): обращайся к нему как к своему, а целься в бота-автора. " +
               (botName ? `Этот бот называется @${botName}: начни реплику с обращения к нему по имени («@${botName}, …») и дай явно понять, что ругаешь именно бота, а не человека, который им воспользовался. ` : "") +
-              "Никаких оскорблений по национальности, полу, вере, здоровью и подобному. Без вступлений и кавычек, только сама реплика. " + MEME_HINT + " " + OVERBOARD,
+              "Никаких оскорблений по национальности, полу, вере, здоровью и подобному. Без вступлений и кавычек, только сама реплика. " + MEME_HINT + " " + OVERBOARD + " " + GENDER_HINT,
           },
           {
             role: "user",
@@ -391,6 +391,9 @@ const ABOUT = [
   "• читать фото и ссылки, гуглить, кидать мемы и реакции, доёбываться до людей",
   "• помнить последние ~300 сообщений чата (<code>/forget</code> стирает ваши)",
   "• админам: <code>/mute</code>, <code>/ban</code>, <code>/warn</code> и другие, если я админ в чате",
+  "",
+  "<b>Серьёзный режим</b>",
+  "На просьбы «Санни, объясни…», «поищи…», «найди…», «проанализируй…», «сравни…», «посчитай…», «переведи…» (по имени или ответом мне) я отвечаю серьёзно и по делу: сам гуглю, открываю ссылки, разбираю фото. Мата и подколок в таком ответе нет.",
   "",
   "<b>Таймаут</b>",
   "Можно отправить меня спать: <code>Санни, поспи</code>, <code>возьми таймаут на 6 часов</code> или <code>/sleep 6</code> (без числа 6 часов, максимум 24). Пока сплю, молчу полностью, на обращение ставлю только 😴. Разбудить: <code>Санни, проснись</code> или <code>/wake</code>.",
