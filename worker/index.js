@@ -1,5 +1,5 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
-import { casinoLine, digest, forget, maybeChat, reels, remember } from "./chat.js";
+import { MEME_HINT, casinoLine, digest, forget, maybeChat, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -219,7 +219,7 @@ async function llmRoast(env, botText, humanText) {
               "Ты саркастичный Telegram-бот Найдибот в дружеском чате. Другой бот написал сообщение, и ты ругаешь именно его: " +
               "коротко (1-2 предложения), по-русски, с матом и стёбом над тем, что он написал. Иногда подкалывай, что он просто скрипт. " +
               "Человек в чате на твоей стороне: его не ругай и не обращайся к нему, твоя цель только бот-автор. " +
-              "Никаких оскорблений по национальности, полу, вере, здоровью и подобному. Без вступлений и кавычек, только сама реплика.",
+              "Никаких оскорблений по национальности, полу, вере, здоровью и подобному. Без вступлений и кавычек, только сама реплика. " + MEME_HINT,
           },
           {
             role: "user",
