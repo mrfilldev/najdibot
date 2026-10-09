@@ -1,5 +1,5 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
-import { forget, maybeChat, remember } from "./chat.js";
+import { digest, forget, maybeChat, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -293,6 +293,7 @@ const HELP = [
   "Матерный запрос — получишь шутку вместо ссылок",
   "Ответь на сообщение чужого бота — я его обматерю (нейросеть)",
   "<code>депни в казик</code> — крутану автомат 🎰: проиграл — погорюю, выиграл — оскорблю кого-нибудь из чата",
+  "<code>/сводка</code> — юмористическая сводка чата за 12 часов (и сам пришлю её утром и вечером)",
   "В группах иногда лаю: ГАВ",
   "В группах читаю чат, сам иногда вставляю слово, реакцию или мем с Reddit. Позови: @najdibot. <code>/forget</code> — стереть всё, что я помню о тебе",
   "",
@@ -356,6 +357,7 @@ const CASINO_WIN = [
   "Ебать, семёрки! {who}, тебя бы в этот автомат не пустили даже вместо ручки.",
 ];
 const lastCasino = new Map();
+const lastDigest = new Map();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const SYMPHONY = /робот\s+может\s+сочинить\s+симфони/i;
@@ -364,6 +366,23 @@ const PLAY = /^сыграйбля[\s,:;!.-]+(.{2,})$/is;
 const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
 
 export default {
+  // Cron (wrangler.toml): раз в 12 часов шлём сводку в каждую группу, где за это время было хотя бы 8 сообщений.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil((async () => {
+      const since = Math.floor(Date.now() / 1000) - 12 * 3600;
+      const { results } = await env.DB.prepare("SELECT chat_id, COUNT(*) n FROM messages WHERE ts>? AND chat_id<0 AND user_id!=0 GROUP BY chat_id HAVING n>=8")
+        .bind(since).all();
+      for (const c of results) {
+        try {
+          const text = await digest(env, c.chat_id, 12);
+          if (text) await tg(env, "sendMessage", { chat_id: c.chat_id, text });
+        } catch (e) {
+          console.error("digest failed", c.chat_id, e.message);
+        }
+      }
+    })());
+  },
+
   async fetch(request, env, ctx) {
     if (request.method !== "POST") return new Response("ok");
     // Служебное: POST /restart (с секретом вебхука) — убить живой экземпляр контейнера, чтобы после деплоя поднялась новая версия.
@@ -417,6 +436,17 @@ export default {
     if (isGroup && text && /^\/forget(@\w+)?\b/i.test(text)) {
       const n = await forget(env, msg.chat.id, msg.from.id);
       await reply(env, msg, `Забыл всё, что ты писал(а) здесь: ${n} сообщ.`);
+      return new Response("ok");
+    }
+    if (isGroup && text && /^\/(сводка|digest)(@\w+)?\b/i.test(text)) {
+      if (Date.now() - (lastDigest.get(msg.chat.id) ?? 0) < 300_000) {
+        await reply(env, msg, "Сводку я уже делал недавно, подожди пять минут.");
+        return new Response("ok");
+      }
+      lastDigest.set(msg.chat.id, Date.now());
+      await tg(env, "sendChatAction", { chat_id: msg.chat.id, action: "typing" });
+      const d = await digest(env, msg.chat.id, 12).catch(() => null);
+      await reply(env, msg, d ? esc(d) : "За последние 12 часов в чате почти ничего не было, сводить нечего.");
       return new Response("ok");
     }
     // Запоминаем текст и подписи к фото группы для контекста (команды и сообщения ботов не храним).

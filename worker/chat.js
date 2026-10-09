@@ -155,3 +155,41 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
   }
   return false;
 }
+
+// ---- Сводка чата с юмором (по расписанию раз в 12 часов и по /сводка) ----
+const DIGEST_SYSTEM = `Ты — Найдибот, саркастичный участник дружеского Telegram-чата. Сделай юмористическую сводку чата за последние часы.
+Правила:
+- 4-7 коротких пунктов, каждый с эмодзи в начале: о чём спорили, кто что выкинул, внутренние шутки, кто молчал или орал.
+- Называй людей по именам, как в переписке. Опирайся только на переписку, ничего не выдумывай.
+- Тон: ехидный, живой, можно лёгкий мат. Никаких оскорблений по национальности, полу, вере, здоровью и подобному.
+- Если ничего интересного не было, так и скажи с издёвкой.
+- Без markdown и без вступлений, не длиннее 900 символов.`;
+
+export async function digest(env, chatId, hours = 12) {
+  if (!env.DB || !env.OPENROUTER_API_KEY) return null;
+  const since = Math.floor(Date.now() / 1000) - hours * 3600;
+  const { results } = await env.DB.prepare("SELECT name, text FROM messages WHERE chat_id=? AND ts>? ORDER BY id ASC LIMIT 300")
+    .bind(chatId, since)
+    .all();
+  return digestFromRows(env, results, hours);
+}
+
+export async function digestFromRows(env, rows, hours = 12) {
+  if (!rows || rows.length < 5) return null;
+  let log = rows.map((r) => `${r.name}: ${String(r.text).slice(0, 300)}`).join("\n");
+  if (log.length > 20000) log = log.slice(-20000);
+  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
+    signal: AbortSignal.timeout(40_000),
+    body: JSON.stringify({
+      model: env.LLM_MODEL, max_tokens: 700,
+      messages: [
+        { role: "system", content: DIGEST_SYSTEM },
+        { role: "user", content: `Переписка за последние ${hours} ч (${rows.length} сообщений):\n${log}` },
+      ],
+    }),
+  });
+  const text = (await r.json()).choices?.[0]?.message?.content?.trim();
+  return text ? `📰 Сводка за ${hours} ч\n\n${text.slice(0, 1500)}` : null;
+}

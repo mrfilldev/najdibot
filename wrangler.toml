@@ -23,3 +23,7 @@ LLM_MODEL = "google/gemini-2.5-flash"
 binding = "DB"
 database_name = "najdibot"
 database_id = "1ca1697d-9a02-4e72-88a4-190214746e8c"
+
+# Сводка чата: 06:00 и 18:00 UTC (09:00 и 21:00 по Москве и Кипру)
+[triggers]
+crons = ["0 6,18 * * *"]
