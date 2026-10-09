@@ -38,3 +38,5 @@ Telegram-бот @najdibot на Cloudflare Workers (+ Container для скачи
   После `wrangler deploy` живой контейнер продолжает работать на старом коде, пока не уснёт (10 мин), поэтому нужен `/restart`.
 - Контейнеру нужен `--js-runtimes node` для `yt-dlp`, иначе YouTube отвечает 403.
 - `yt-dlp` качает сначала анонимно, при ошибке повторяет с cookies (`runYt`): с cookies с IP Cloudflare YouTube быстро начинает отвечать 403, а без них работает стабильно.
+
+- Правила «доёба» (запуск, длительность, затухание, остановка, приоритеты): [`rules-of-doeb.md`](rules-of-doeb.md).
