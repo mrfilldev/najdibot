@@ -235,3 +235,106 @@ export async function casinoLine(env, { win, player, reelNames, target, targetMs
     return null;
   }
 }
+
+// ---- «Доебись до …»: бот цепляет участника с тегом и ведёт с ним диалог ----
+export const POKE_RE = /(?:найдибля|найдибот|@najdibot)[\s,:]*(?:до|при)ебись(?:\s+(?:до|к)\s+(.+?))?\s*[!.?]*$/is;
+export const POKE_STOP = /(?:найдибля|найдибот|@najdibot)[\s,:]*(?:отстань|отвали|хватит|слезь)/i;
+const POKE_TURNS = 6; // сколько реплик бот даёт в диалоге
+const POKE_MINUTES = 30;
+const POKE_GAP = 15_000; // не чаще раза в 15 с на человека
+
+const TR = { а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "h", ц: "c", ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya" };
+const norm = (x) => [...String(x).toLowerCase()].map((c) => TR[c] ?? c).join("").replace(/[^a-z0-9]/g, "");
+// Имя из команды («Кирилла») против имени в чате («Kirill»): сравниваем по основе, кириллицу и латиницу приводим к одному виду.
+function matchName(arg, people) {
+  const a = norm(arg);
+  if (a.length < 3) return null;
+  return people.find((p) => {
+    const n = norm(p.name);
+    return n.length >= 3 && (a.startsWith(n.slice(0, Math.min(4, n.length))) || n.startsWith(a.slice(0, 4)));
+  }) ?? null;
+}
+
+async function ask(env, system, user, maxTokens = 220) {
+  try {
+    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
+      signal: AbortSignal.timeout(20_000),
+      body: JSON.stringify({ model: env.LLM_MODEL, max_tokens: maxTokens, temperature: 1.0, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
+    });
+    return (await r.json()).choices?.[0]?.message?.content?.trim() || null;
+  } catch (e) {
+    console.error("ask failed:", e.message);
+    return null;
+  }
+}
+
+const POKE_SYSTEM = `Ты — Найдибот, наглый саркастичный участник дружеского Telegram-чата. Тебя попросили доебаться до участника и завязать с ним диалог. Пиши по-русски, коротко (1-2 фразы, до 250 символов), как живой человек в чате: мат, стёб, чёрный юмор без стоп-слов. Зацепись за то, что он недавно писал, и закончи вопросом или подколкой, на которую хочется ответить. Только сама реплика, без кавычек. Не оскорбляй по национальности, полу, вере и здоровью.
+${MEME_HINT}`;
+
+const POKE_FALLBACK = ["{who}, ты чё притих, нахуй? Давай рассказывай, чем занят, а то скучно, блядь.", "{who}, слышь, а ты вообще живой? Ответь хоть что-нибудь, не заставляй меня доёбываться дальше."];
+
+const esc2 = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// Возвращает true, если команда обработана.
+export async function poke(env, tg, msg, arg) {
+  const chatId = msg.chat.id;
+  const say = (text, extra = {}) => tg("sendMessage", { chat_id: chatId, text, reply_parameters: { message_id: msg.message_id }, ...extra });
+  if (!env.DB || !env.OPENROUTER_API_KEY) return false;
+
+  const { results: people } = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id!=0 GROUP BY user_id").bind(chatId).all();
+  let target = null;
+  const rep = msg.reply_to_message?.from;
+  if (rep && !rep.is_bot) target = { user_id: rep.id, name: rep.first_name || rep.username || "эй ты" };
+  else if (arg && /(кого[- ]?нибудь|кого угодно|любого|рандом|случайн)/i.test(arg)) {
+    const others = people.filter((p) => p.user_id !== msg.from.id);
+    target = others.length ? others[Math.floor(Math.random() * others.length)] : null;
+  } else if (arg) target = matchName(arg, people);
+  if (!target) {
+    await say("Не понял, до кого. Ответь этой командой на его сообщение, назови имя или скажи «до кого-нибудь».");
+    return true;
+  }
+
+  const rows = await history(env, chatId);
+  const { results: tm } = await env.DB.prepare("SELECT text FROM messages WHERE chat_id=? AND user_id=? ORDER BY id DESC LIMIT 5").bind(chatId, target.user_id).all();
+  const log = rows.slice(-15).map((r) => `${r.name}: ${r.text}`).join("\n");
+  const ctx = `Цель: {who} (имя ${target.name}). Просит доебаться: ${msg.from.first_name || "кто-то из чата"}.\nЧто он писал недавно: ${tm.length ? tm.map((x) => `«${String(x.text).slice(0, 150)}»`).join("; ") : "ничего"}.\nПоследние сообщения чата:\n${log}\n\nНапиши реплику, обязательно используй {who} вместо имени (оно превратится в тег).`;
+  const line = (await ask(env, POKE_SYSTEM, ctx)) ?? POKE_FALLBACK[Math.floor(Math.random() * POKE_FALLBACK.length)];
+
+  const who = `<a href="tg://user?id=${target.user_id}">${esc2(target.name)}</a>`;
+  const body = line.includes("{who}") ? line.split("{who}").map(esc2).join(who) : `${who}, ${esc2(line)}`;
+  await tg("sendChatAction", { chat_id: chatId, action: "typing" });
+  await tg("sendMessage", { chat_id: chatId, text: body, parse_mode: "HTML" });
+  await remember(env, chatId, 0, "Найдибот", line.replace("{who}", target.name));
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.prepare("INSERT OR REPLACE INTO pokes (chat_id, user_id, name, until, left, last) VALUES (?,?,?,?,?,?)")
+    .bind(chatId, target.user_id, target.name, now + POKE_MINUTES * 60, POKE_TURNS, Date.now()).run();
+  return true;
+}
+
+// Сообщение от «цели»: продолжаем доёб, пока есть ходы и время. true — ответили.
+export async function pokeContinue(env, tg, msg) {
+  if (!env.DB || !env.OPENROUTER_API_KEY) return false;
+  const chatId = msg.chat.id;
+  const row = await env.DB.prepare("SELECT * FROM pokes WHERE chat_id=? AND user_id=?").bind(chatId, msg.from.id).first();
+  const now = Math.floor(Date.now() / 1000);
+  if (!row || row.until < now || row.left <= 0 || Date.now() - row.last < POKE_GAP) return false;
+  await env.DB.prepare("UPDATE pokes SET left=left-1, last=? WHERE chat_id=? AND user_id=?").bind(Date.now(), chatId, msg.from.id).run();
+
+  const rows = await history(env, chatId);
+  const log = rows.slice(-12).map((r) => `${r.name}: ${r.text}`).join("\n");
+  const last = row.left === 1;
+  const sys = `${POKE_SYSTEM}\n\nДиалог уже идёт: ты доёбываешься до ${row.name}, он ответил. Ответь коротко на его слова, зацепись и дави дальше, задай следующий вопрос.${last ? " Это твоя последняя реплика: ехидно закругляйся." : ""}`;
+  await tg("sendChatAction", { chat_id: chatId, action: "typing" });
+  const line = await ask(env, sys, `Последние сообщения чата:\n${log}\n\nОтветь ${row.name}.`);
+  if (!line) return false;
+  await tg("sendMessage", { chat_id: chatId, text: line.slice(0, 600), reply_parameters: { message_id: msg.message_id } });
+  await remember(env, chatId, 0, "Найдибот", line);
+  return true;
+}
+
+export async function pokeStop(env, chatId) {
+  const r = await env.DB.prepare("DELETE FROM pokes WHERE chat_id=?").bind(chatId).run();
+  return r.meta?.changes ?? 0;
+}

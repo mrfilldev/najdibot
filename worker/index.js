@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { MEME_HINT, casinoLine, digest, forget, maybeChat, reels, remember } from "./chat.js";
+import { MEME_HINT, POKE_RE, POKE_STOP, casinoLine, digest, forget, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -296,6 +296,7 @@ const HELP = [
   "<code>депни в казик</code> — крутану автомат 🎰: проиграл — погорюю, выиграл — оскорблю кого-нибудь из чата",
   "<code>/сводка</code> — юмористическая сводка чата за 12 часов (и сам пришлю её в 18:00 и в полночь)",
   "<b>Для админов</b> (ответом на сообщение, бот должен быть админом): <code>/mute [мин]</code>, <code>/unmute</code>, <code>/ban</code>, <code>/unban</code>, <code>/kick</code>, <code>/del</code>, <code>/warn</code> (3 = мьют на час), <code>/unwarn</code>, <code>/warns</code>",
+  "<code>@najdibot доебись до Кирилла</code> (или ответом на сообщение, или «до кого-нибудь») — пристану к человеку и поболтаю с ним; <code>@najdibot отстань</code> — отвалю",
   "В группах иногда лаю: ГАВ",
   "В группах читаю чат, сам иногда вставляю слово, реакцию или мем с Reddit. Позови: @najdibot. <code>/forget</code> — стереть всё, что я помню о тебе",
   "",
@@ -476,6 +477,22 @@ export default {
     if (isPrivate && media) {
       await reply(env, msg, `file_id: <code>${media.file_id}</code>\nразмер: ${media.file_size ?? "?"} байт`);
       return new Response("ok");
+    }
+    // «@najdibot доебись до Кирилла» / ответом на сообщение / «до кого-нибудь»: бот цепляет человека и ведёт с ним диалог.
+    if (isGroup && text) {
+      const pm = text.match(POKE_RE);
+      if (pm) {
+        await poke(env, (m, b) => tg(env, m, b), msg, pm[1]).catch((e) => console.error("poke", e.message));
+        return new Response("ok");
+      }
+      if (POKE_STOP.test(text)) {
+        const n = await pokeStop(env, msg.chat.id).catch(() => 0);
+        await reply(env, msg, n ? "Ладно, отвалил." : "Я и так ни к кому не доёбываюсь.");
+        return new Response("ok");
+      }
+      if (!text.startsWith("/") && (await pokeContinue(env, (m, b) => tg(env, m, b), msg).catch(() => false))) {
+        return new Response("ok");
+      }
     }
     // В личке любой текст — запрос РФ (или «найди …» — мир), в группах нужен триггер.
     const t = text && !text.startsWith("/")
