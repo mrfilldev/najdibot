@@ -195,11 +195,11 @@ const BOT_ROASTS = [
 
 // Антипетля: на одного бота в одном чате не чаще раза в минуту, и не всегда.
 const lastRoast = new Map();
-function shouldRoast(chatId, botId) {
+function shouldRoast(chatId, botId, { cooldown = 60_000, chance = 0.7 } = {}) {
   const key = `${chatId}:${botId}`;
   const now = Date.now();
-  if (now - (lastRoast.get(key) ?? 0) < 60_000) return false;
-  if (Math.random() > 0.7) return false;
+  if (now - (lastRoast.get(key) ?? 0) < cooldown) return false;
+  if (Math.random() > chance) return false;
   lastRoast.set(key, now);
   return true;
 }
@@ -276,7 +276,7 @@ export default {
     // Человек ответил чужому боту: бот-автор виден в reply_to_message, ругаемся прямо под его сообщением.
     const target = msg?.reply_to_message;
     const ownId = Number(env.BOT_TOKEN.split(":")[0]);
-    if (target?.from?.is_bot && target.from.id !== ownId && shouldRoast(msg.chat.id, target.from.id)) {
+    if (target?.from?.is_bot && target.from.id !== ownId && shouldRoast(msg.chat.id, target.from.id, { cooldown: 5_000, chance: 1 })) {
       await tg(env, "sendMessage", {
         chat_id: msg.chat.id,
         reply_parameters: { message_id: target.message_id },
