@@ -634,23 +634,29 @@ export async function moodStatus(env, chatId) {
 const FEEL_WORDS = (n) => (n >= 4 ? "обожает" : n >= 2 ? "нравится" : n >= 1 ? "скорее симпатичен" : n <= -4 ? "бесит до невозможности" : n <= -2 ? "дуется на него" : n <= -1 ? "слегка раздражает" : "нейтрально");
 
 // Отношение с затуханием к нулю: за каждые сутки без событий на единицу ближе к нейтральному.
+// Отношение с учётом затухания (на единицу в сутки к нулю) и нижней планки floor («закреплённые» любимчики не опускаются ниже неё).
+function effScore(r) {
+  const days = Math.floor((Date.now() / 1000 - r.updated) / 86400);
+  let sc = r.score > 0 ? Math.max(0, r.score - days) : Math.min(0, r.score + days);
+  if (r.floor != null) sc = Math.max(sc, r.floor);
+  return sc;
+}
+
 async function loadFeeling(env, chatId, userId) {
-  const row = await env.DB.prepare("SELECT name, score, note, updated FROM feelings WHERE chat_id=? AND user_id=?").bind(chatId, userId).first().catch(() => null);
+  const row = await env.DB.prepare("SELECT name, score, note, updated, floor FROM feelings WHERE chat_id=? AND user_id=?").bind(chatId, userId).first().catch(() => null);
   if (!row) return null;
-  const days = Math.floor((Date.now() / 1000 - row.updated) / 86400);
-  const score = row.score > 0 ? Math.max(0, row.score - days) : Math.min(0, row.score + days);
-  return { ...row, score };
+  return { ...row, score: effScore(row) };
 }
 
 export async function bumpFeeling(env, chatId, userId, name, delta, note, minGapSec = 0) {
   if (!env.DB || !userId) return;
   const cur = await loadFeeling(env, chatId, userId);
   if (minGapSec && cur && Math.floor(Date.now() / 1000) - cur.updated < minGapSec) return;
-  const score = Math.min(Math.max((cur?.score ?? 0) + delta, -5), 5);
+  const score = Math.max(Math.min(Math.max((cur?.score ?? 0) + delta, -5), 5), cur?.floor ?? -5);
   // заметка («почему») обновляется только если она согласуется со знаком итога: плюс не должен держаться на «надоел», а минус на «хвалил»
   const consistent = (delta > 0 && score > 0) || (delta < 0 && score < 0) || score === 0;
   const keepNote = consistent && note ? String(note) : cur?.score !== undefined && Math.sign(cur.score) === Math.sign(score) ? cur?.note : "";
-  await env.DB.prepare("INSERT OR REPLACE INTO feelings (chat_id, user_id, name, score, note, updated) VALUES (?,?,?,?,?,?)")
+  await env.DB.prepare("INSERT INTO feelings (chat_id, user_id, name, score, note, updated) VALUES (?,?,?,?,?,?) ON CONFLICT(chat_id, user_id) DO UPDATE SET name=excluded.name, score=excluded.score, note=excluded.note, updated=excluded.updated")
     .bind(chatId, userId, name || cur?.name || "кто-то", score, String(keepNote || "").slice(0, 100), Math.floor(Date.now() / 1000)).run().catch(() => {});
 }
 
@@ -678,14 +684,12 @@ export async function relationPrompt(env, chatId, userId, name) {
 }
 
 export async function feelingsStatus(env, chatId) {
-  const { results: fs } = await env.DB.prepare("SELECT user_id, name, score, note, updated FROM feelings WHERE chat_id=?").bind(chatId).all().catch(() => ({ results: [] }));
+  const { results: fs } = await env.DB.prepare("SELECT user_id, name, score, note, updated, floor FROM feelings WHERE chat_id=?").bind(chatId).all().catch(() => ({ results: [] }));
   const { results: people } = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id!=0 GROUP BY user_id").bind(chatId).all().catch(() => ({ results: [] }));
   const byId = new Map();
   for (const p of people) byId.set(p.user_id, { name: p.name, score: 0, note: "" });
   for (const r of fs) {
-    const days = Math.floor((Date.now() / 1000 - r.updated) / 86400);
-    const score = r.score > 0 ? Math.max(0, r.score - days) : Math.min(0, r.score + days);
-    byId.set(r.user_id, { name: r.name, score, note: r.note });
+    byId.set(r.user_id, { name: r.name, score: effScore(r), note: r.note });
   }
   const all = [...byId.values()];
   const line = (r) => `${r.score > 0 ? "+" : ""}${r.score} ${r.name}: ${FEEL_WORDS(r.score)}${r.note ? `, ${r.note}` : ""}`;
@@ -712,11 +716,8 @@ export async function applyRelations(env, chatId, relations) {
 
 // Короткая сводка отношений ко всем людям чата: чтобы на «как ты относишься к Дане?» он отвечал по правде.
 export async function relationsSummary(env, chatId) {
-  const { results } = await env.DB.prepare("SELECT name, score, note, updated FROM feelings WHERE chat_id=?").bind(chatId).all().catch(() => ({ results: [] }));
-  const rows = results.map((r) => {
-    const days = Math.floor((Date.now() / 1000 - r.updated) / 86400);
-    return { ...r, score: r.score > 0 ? Math.max(0, r.score - days) : Math.min(0, r.score + days) };
-  }).filter((r) => r.score !== 0);
+  const { results } = await env.DB.prepare("SELECT name, score, note, updated, floor FROM feelings WHERE chat_id=?").bind(chatId).all().catch(() => ({ results: [] }));
+  const rows = results.map((r) => ({ ...r, score: effScore(r) })).filter((r) => r.score !== 0);
   if (!rows.length) return "";
   return `Твои личные отношения с людьми чата (от -5 до +5): ${rows.map((r) => `${r.name} ${r.score > 0 ? "+" : ""}${r.score} (${FEEL_WORDS(r.score)}${r.note ? `, ${r.note}` : ""})`).join("; ")}. Если тебя спросят, как ты к кому-то относишься, ответь честно по этим данным, в своём стиле и с причиной, словами, без цифр и без слов вроде «плюс два» или «минус два»; про тех, кого здесь нет, скажи, что особых чувств нет.`;
 }
@@ -734,7 +735,7 @@ export async function apologize(env, chatId, userId, name) {
   if (!env.DB || !userId) return false;
   const cur = await loadFeeling(env, chatId, userId);
   if (cur && cur.score >= 2) return false;
-  await env.DB.prepare("INSERT OR REPLACE INTO feelings (chat_id, user_id, name, score, note, updated) VALUES (?,?,?,?,?,?)")
+  await env.DB.prepare("INSERT INTO feelings (chat_id, user_id, name, score, note, updated) VALUES (?,?,?,?,?,?) ON CONFLICT(chat_id, user_id) DO UPDATE SET name=excluded.name, score=excluded.score, note=excluded.note, updated=excluded.updated")
     .bind(chatId, userId, name || cur?.name || "кто-то", 2, "извинился передо мной", Math.floor(Date.now() / 1000)).run().catch(() => {});
   return true;
 }
