@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { ALIAS_RE, MEME_HINT, OVERBOARD, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { ALIAS_RE, MEME_HINT, OVERBOARD, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -203,7 +203,7 @@ const BOT_ROASTS = [
 ];
 
 // Живая ругань через OpenRouter. При любой ошибке возвращаем null, и вызывающий берёт фразу из BOT_ROASTS.
-async function llmRoast(env, botText, humanText, botName = null) {
+async function llmRoast(env, botText, humanText, botName = null, mood = "") {
   if (!env.OPENROUTER_API_KEY) return null;
   try {
     const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -219,7 +219,7 @@ async function llmRoast(env, botText, humanText, botName = null) {
             content:
               "Ты саркастичный Telegram-бот Найдибот в дружеском чате. Другой бот написал сообщение, и ты ругаешь именно его: " +
               "коротко (1-2 предложения), по-русски, с матом и стёбом над тем, что он написал. Иногда подкалывай, что он просто скрипт. " +
-              "Главный мотив: ты РЕВНУЕШЬ. Тебе обидно и горько, что люди пользуются этим ботом, а не тобой (ты Санни, он же Найдибот, Саныч). Ругай чужого бота и ревниво зови людей к себе: подчёркивай, чем ты лучше, что он тебя копирует и отбирает у тебя людей, и что пользоваться надо Санни. " +
+              (mood ? mood + " " : "") + "Главный мотив: ты РЕВНУЕШЬ. Тебе обидно и горько, что люди пользуются этим ботом, а не тобой (ты Санни, он же Найдибот, Саныч). Ругай чужого бота и ревниво зови людей к себе: подчёркивай, чем ты лучше, что он тебя копирует и отбирает у тебя людей, и что пользоваться надо Санни. " +
               "Человека в чате не ругай (он твой, просто заблудился): обращайся к нему как к своему, а целься в бота-автора. " +
               (botName ? `Этот бот называется @${botName}: начни реплику с обращения к нему по имени («@${botName}, …») и дай явно понять, что ругаешь именно бота, а не человека, который им воспользовался. ` : "") +
               "Никаких оскорблений по национальности, полу, вере, здоровью и подобному. Без вступлений и кавычек, только сама реплика. " + MEME_HINT + " " + OVERBOARD,
@@ -301,6 +301,7 @@ const HELP = [
   "<code>Санни доебись до Кирилла</code> (или @najdibot, Саныч, Sunny; можно ответом на сообщение или «до кого-нибудь») — пристану к человеку и поболтаю с ним; <code>Санни отстань</code> — отвалю",
   "Если спросить меня по имени (<code>Санни, сколько стоит …</code>) или ответить мне на сообщение со ссылкой, я сам поищу в интернете и открою страницу",
   "<code>/rules_of_doeb</code> — правила доёба",
+  "<code>/mood</code> — какое сейчас у меня настроение (оно меняется само: от событий, времени суток и вашего поведения)",
   "В группах иногда лаю: ГАВ",
   "В группах читаю чат, сам иногда вставляю слово, реакцию или мем с Reddit. Позови: @najdibot. <code>/forget</code> — стереть всё, что я помню о тебе",
   "",
@@ -511,6 +512,10 @@ export default {
         msg.photo && (msg.caption || "").trim() ? `[фото] ${msg.caption}` : saved, msg.message_id, msg.from.username ?? null,
       ).catch((e) => console.error("remember", e.message));
     }
+    if (text && /^\/(mood|настроение)(@\w+)?(?![\w-])/i.test(text)) {
+      await reply(env, msg, esc(await moodStatus(env, msg.chat.id)));
+      return new Response("ok");
+    }
     if (text && /^\/(start|help)(@\w+)?\b/i.test(text)) {
       await reply(env, msg, HELP);
       return new Response("ok");
@@ -581,10 +586,15 @@ export default {
           }
         }
         // фразу готовим, пока крутятся барабаны (иначе спойлер)
+        const mood = await moodPrompt(env, msg.chat.id);
         const [line] = await Promise.all([
-          casinoLine(env, { win, player, reelNames: reels(v), target: target?.name, targetMsgs }),
+          casinoLine(env, { win, player, reelNames: reels(v), target: target?.name, targetMsgs, mood }),
           sleep(3500),
         ]);
+        // событие меняет настроение: проигрыш огорчает или злит, джекпот делает самодовольным
+        await (win
+          ? setMood(env, msg.chat.id, "самодовольный", 4, "сорвал джекпот в казино")
+          : setMood(env, msg.chat.id, ["грустный", "злой", "обиженный"][Math.floor(Math.random() * 3)], 4, "проиграл в казино"));
         const spinNote = `[крутил автомат 🎰 по просьбе ${player}: выпало ${reels(v).join(", ")}, ${win ? "ДЖЕКПОТ" : "проигрыш"}]`;
         if (!win) {
           const text = line ?? CASINO_LOSS[Math.floor(Math.random() * CASINO_LOSS.length)];
@@ -613,7 +623,9 @@ export default {
     if (other && shouldRoast(msg.chat.id, other.id, { chance: 0.1 })) { // 1 к 10: чужих ботов не трогаем постоянно
       console.log("roast bot", other.username);
       const bn = other.username ?? null;
-      const line = (await withTyping(env, msg.chat.id, () => llmRoast(env, msg.text || msg.caption, null, bn))) ?? `${bn ? `@${bn}, ` : ""}${pickRoast()}`;
+      await setMood(env, msg.chat.id, "ревнивый", 4, "люди пользуются чужим ботом");
+      const mood = await moodPrompt(env, msg.chat.id);
+      const line = (await withTyping(env, msg.chat.id, () => llmRoast(env, msg.text || msg.caption, null, bn, mood))) ?? `${bn ? `@${bn}, ` : ""}${pickRoast()}`;
       await reply(env, msg, esc(line));
       return new Response("ok");
     }
@@ -621,10 +633,12 @@ export default {
     const target = msg?.reply_to_message;
     const ownId = Number(env.BOT_TOKEN.split(":")[0]);
     if (target?.from?.is_bot && target.from.id !== ownId && shouldRoast(msg.chat.id, target.from.id, { cooldown: 5_000, chance: 1 })) {
+      const mood0 = await moodPrompt(env, msg.chat.id);
+      await setMood(env, msg.chat.id, "ревнивый", 4, "люди отвечают чужому боту");
       await tg(env, "sendMessage", {
         chat_id: msg.chat.id,
         reply_parameters: { message_id: target.message_id },
-        text: (await withTyping(env, msg.chat.id, () => llmRoast(env, target.text || target.caption, msg.text, target.from.username ?? null))) ?? `${target.from.username ? `@${target.from.username}, ` : ""}${pickRoast()}`,
+        text: (await withTyping(env, msg.chat.id, () => llmRoast(env, target.text || target.caption, msg.text, target.from.username ?? null, mood0))) ?? `${target.from.username ? `@${target.from.username}, ` : ""}${pickRoast()}`,
       });
       return new Response("ok");
     }
@@ -677,6 +691,7 @@ export default {
       // Просят отстать (ответом на бота, по имени или посреди диалога): сворачиваемся одной фразой и гасим доёб на этого человека.
       if ((addressed || inConvo) && POKE_QUIT.test(text)) {
         await env.DB.prepare("DELETE FROM pokes WHERE chat_id=? AND user_id=?").bind(msg.chat.id, msg.from.id).run().catch(() => {});
+        await setMood(env, msg.chat.id, "обиженный", 3, "послали, сказали отстать");
         await reply(env, msg, POKE_BYE[Math.floor(Math.random() * POKE_BYE.length)]);
         return new Response("ok");
       }

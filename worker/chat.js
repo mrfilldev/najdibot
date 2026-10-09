@@ -146,7 +146,7 @@ async function complete(env, messages, { tools = false, maxTokens = 400 } = {}) 
   return "";
 }
 
-export async function decide(env, rows, forced, replied = null, extra = "", asker = null) {
+export async function decide(env, rows, forced, replied = null, extra = "", asker = null, mood = "") {
   // Ответ на конкретное сообщение: переписку берём только как короткий фон, чтобы бот не смешивал чужие реплики
   const focused = forced && !!replied;
   const log = (focused ? rows.slice(-6) : rows).map((r) => `${r.name}: ${r.text}`).join("\n");
@@ -169,7 +169,7 @@ export async function decide(env, rows, forced, replied = null, extra = "", aske
   const system = forced
     ? `${SYSTEM}\n\nСейчас разрешено только действие text: {"action":"text","text":"реплика"}. Правило про «1-2 фразы» тут НЕ действует: на прямое обращение отвечай развёрнуто, 3-6 предложений (до 900 символов). Если обращаются ответом на сообщение (новость, пост, фото, ссылка), разбери его по существу: назови 1-2 конкретных пункта оттуда, выскажи свою позицию, обыграй мемом или чёрным юмором и закончи подколкой или встречным вопросом. Не ограничивайся общими шутками про заголовок. Отвечай с матом.\nНе путай авторов: отвечай тому, кто тебя позвал (он указан в запросе), а автор сообщения, на которое он ответил, это другой человек (или он сам), и слова из того сообщения принадлежат ему, а не собеседнику. Имена Санни, Sunny, Саныч, Саня, Сань, Санёк, найдибот — это ТВОИ имена: никогда не называй ими собеседника. Не придумывай «тут пишут» и не ссылайся на неизвестные источники: поиском пользуйся только для настоящих фактов (цены, новости, характеристики), а не для шуток про людей из чата.\nУ тебя есть инструменты: web_search (поиск в интернете) и open_url (прочитать страницу). Если вопрос про цены, новости, характеристики, даты или любые факты, которые ты не знаешь точно, СНАЧАЛА вызови web_search и опирайся на найденные цифры, не выдумывай их. Итоговый ответ всегда в JSON {"action":"text","text":"…"}.`
     : SYSTEM;
-  const out = await complete(env, [{ role: "system", content: system }, { role: "user", content }], { tools, maxTokens: forced ? 1100 : 400 });
+  const out = await complete(env, [{ role: "system", content: system + (mood ? `\n\n${mood}` : "") }, { role: "user", content }], { tools, maxTokens: forced ? 1100 : 400 });
   const m = out.match(/\{[\s\S]*\}/);
   return m ? JSON.parse(m[0]) : null;
 }
@@ -222,10 +222,11 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
     // ссылки из сообщения и из того, на которое ответили: открываем сразу (до двух), чтобы бот видел страницу, а не только адрес
     const urls = [...new Set([...(msg.text || "").matchAll(URL_RE), ...((rep?.text || rep?.caption || "").matchAll(URL_RE))].map((m) => m[0]))].slice(0, 2);
     const extra = forced && urls.length ? (await Promise.all(urls.map(async (u) => `[${u}]\n${await openUrl(u)}`))).join("\n\n").slice(0, 9000) : "";
+    const mood = await moodPrompt(env, chatId);
     const asker = forced ? { name: msg.from?.first_name || msg.from?.username || "собеседник", text: (msg.text || msg.caption || "").slice(0, 700) } : null;
-    let d = await decide(env, rows, forced, replied, extra, asker).catch((e) => (console.error("decide", e.message), null));
+    let d = await decide(env, rows, forced, replied, extra, asker, mood).catch((e) => (console.error("decide", e.message), null));
     // На прямое обращение молчать нельзя: один повтор, потом запасная фраза.
-    if (forced && d?.action !== "text") d = await decide(env, rows, forced, replied, extra, asker).catch(() => null);
+    if (forced && d?.action !== "text") d = await decide(env, rows, forced, replied, extra, asker, mood).catch(() => null);
     if (forced && d?.action !== "text") d = { action: "text", text: pick(FALLBACKS) };
     if (!d || d.action === "skip") return false;
 
@@ -276,10 +277,10 @@ export async function digest(env, chatId, hours = 12) {
   const { results } = await env.DB.prepare("SELECT name, text FROM messages WHERE chat_id=? AND ts>? ORDER BY id ASC LIMIT 300")
     .bind(chatId, since)
     .all();
-  return digestFromRows(env, results, hours);
+  return digestFromRows(env, results, hours, await moodPrompt(env, chatId));
 }
 
-export async function digestFromRows(env, rows, hours = 12) {
+export async function digestFromRows(env, rows, hours = 12, mood = "") {
   if (!rows || rows.length < 5) return null;
   let log = rows.map((r) => `${r.name}: ${String(r.text).slice(0, 300)}`).join("\n");
   if (log.length > 20000) log = log.slice(-20000);
@@ -290,7 +291,7 @@ export async function digestFromRows(env, rows, hours = 12) {
     body: JSON.stringify({
       model: env.LLM_MODEL, max_tokens: 700,
       messages: [
-        { role: "system", content: DIGEST_SYSTEM },
+        { role: "system", content: DIGEST_SYSTEM + (mood ? `\n\n${mood}` : "") },
         { role: "user", content: `Переписка за последние ${hours} ч (${rows.length} сообщений):\n${log}` },
       ],
     }),
@@ -311,7 +312,7 @@ const CASINO_SYSTEM = `Ты — Найдибот, саркастичный уч�
 ${MEME_HINT} ${OVERBOARD}`;
 
 // win=false: горюешь о проигрыше игрока; win=true: игрок сорвал джекпот, и ты оскорбляешь другого участника ({who}).
-export async function casinoLine(env, { win, player, reelNames, target, targetMsgs }) {
+export async function casinoLine(env, { win, player, reelNames, target, targetMsgs, mood = "" }) {
   if (!env.OPENROUTER_API_KEY) return null;
   const spin = `Барабаны: ${reelNames.join(", ")}.`;
   const task = win
@@ -324,7 +325,7 @@ export async function casinoLine(env, { win, player, reelNames, target, targetMs
       signal: AbortSignal.timeout(15_000),
       body: JSON.stringify({
         model: env.LLM_MODEL, max_tokens: 200, temperature: 1.0,
-        messages: [{ role: "system", content: CASINO_SYSTEM }, { role: "user", content: task }],
+        messages: [{ role: "system", content: CASINO_SYSTEM + (mood ? `\n\n${mood}` : "") }, { role: "user", content: task }],
       }),
     });
     const text = (await r.json()).choices?.[0]?.message?.content?.trim();
@@ -416,7 +417,7 @@ export async function poke(env, tg, msg, arg) {
   const { results: tm } = await env.DB.prepare("SELECT text FROM messages WHERE chat_id=? AND user_id=? ORDER BY id DESC LIMIT 5").bind(chatId, target.user_id).all();
   const log = rows.slice(-15).map((r) => `${r.name}: ${r.text}`).join("\n");
   const ctx = `Цель: {who} (имя ${target.name}). Просит доебаться: ${msg.from.first_name || "кто-то из чата"}.\nЧто он писал недавно: ${tm.length ? tm.map((x) => `«${String(x.text).slice(0, 150)}»`).join("; ") : "ничего"}.\nПоследние сообщения чата:\n${log}\n\nНапиши реплику, обязательно используй {who} вместо имени (оно превратится в тег).`;
-  const line = (await ask(env, POKE_SYSTEM, ctx)) ?? POKE_FALLBACK[Math.floor(Math.random() * POKE_FALLBACK.length)];
+  const line = (await ask(env, `${POKE_SYSTEM}\n\n${await moodPrompt(env, chatId)}`, ctx)) ?? POKE_FALLBACK[Math.floor(Math.random() * POKE_FALLBACK.length)];
 
   const who = `<a href="tg://user?id=${target.user_id}">${esc2(target.name)}</a>`;
   const body = line.includes("{who}") ? line.split("{who}").map(esc2).join(who) : `${who}, ${esc2(line)}`;
@@ -467,7 +468,7 @@ export async function pokeContinue(env, tg, msg) {
     ctxExtra += `\nОн прислал фото${msg.caption ? ` с подписью «${msg.caption.slice(0, 500)}»` : ""}.`;
     image = await photoDataUrl(env, msg.photo);
   }
-  const line = await ask(env, sys, `Последние сообщения чата:\n${log}${ctxExtra}\n\nОтветь ${row.name}.`, 220, image);
+  const line = await ask(env, `${sys}\n\n${await moodPrompt(env, chatId)}`, `Последние сообщения чата:\n${log}${ctxExtra}\n\nОтветь ${row.name}.`, 220, image);
   if (!line) return false;
   await tg("sendMessage", { chat_id: chatId, text: line.slice(0, 600), reply_parameters: { message_id: msg.message_id } });
   await remember(env, chatId, 0, "Найдибот", line);
@@ -524,4 +525,64 @@ export async function isForBot(env, msg, debug = false) {
     }
   }
   return debug ? { yes: false, error: lastError } : false;
+}
+
+// ---- Настроение Санни: само решает, бесит его или грустно ----
+export const MOODS = {
+  "весёлый": "тебе весело, ты шутишь щедро и ржёшь над всем",
+  "злой": "тебя всё бесит, ты огрызаешься, раздражён и ворчишь",
+  "грустный": "тебе грустно и одиноко, в шутках горечь, можешь пожаловаться на жизнь бота",
+  "обиженный": "ты на кого-то в обиде, дуешься и колешь с обидой",
+  "ревнивый": "ты ревнуешь людей к другим ботам и требуешь внимания",
+  "скучающий": "тебе скучно, ты зеваешь, ленишься и вяло язвишь",
+  "сонный": "ты сонный и вялый, путаешься в словах",
+  "философский": "тебя тянет на мрачные размышления о смысле жизни и железа",
+  "самодовольный": "ты доволен собой, хвастаешься и задираешь нос",
+};
+const MOOD_STALE = 25 * 60; // через сколько секунд модель заново решает, как он себя чувствует
+
+export async function setMood(env, chatId, mood, intensity, reason) {
+  if (!env.DB || !MOODS[mood]) return;
+  await env.DB.prepare("INSERT OR REPLACE INTO moods (chat_id, mood, intensity, reason, updated) VALUES (?,?,?,?,?)")
+    .bind(chatId, mood, Math.min(Math.max(intensity | 0, 1), 5), String(reason).slice(0, 100), Math.floor(Date.now() / 1000)).run().catch(() => {});
+}
+
+// Модель сама решает настроение по недавним событиям, прошлому настроению и времени суток.
+async function reassessMood(env, chatId, prev) {
+  const rows = (await history(env, chatId)).slice(-20);
+  const hour = new Date(Date.now() + 3 * 3600_000).getUTCHours(); // МСК
+  const sys = `Ты психика бота Санни (он же Найдибот, Саныч). Реши, какое у него сейчас настроение, исходя из недавней переписки, прошлого настроения и времени суток. Варианты: ${Object.keys(MOODS).join(", ")}.
+Что на него влияет: оскорбления и «тупой бот» бесят или обижают, хвалят и общаются с ним по-доброму радует, игнор и тишина вгоняют в грусть или скуку, споры вокруг и шум бесят, разговоры о смысле жизни тянут в философию, ночью бывает сонным, упоминания других ботов вызывают ревность. Настроение должно меняться не слишком резко, но может, иногда без видимой причины.
+Верни ТОЛЬКО JSON: {"mood":"одно из вариантов","intensity":число от 1 до 5,"reason":"коротко от первого лица, до 60 символов"}.`;
+  const user = `Прошлое настроение: ${prev ? `${prev.mood} (${prev.intensity}/5, причина: ${prev.reason})` : "нет"}.\nСейчас ${hour}:00 по Москве.\nПоследние сообщения:\n${rows.map((r) => `${r.name}: ${String(r.text).slice(0, 200)}`).join("\n") || "(тихо)"}`;
+  const out = await ask(env, sys, user, 120);
+  try {
+    const j = JSON.parse(out.match(/\{[\s\S]*\}/)[0]);
+    if (MOODS[j.mood]) return { mood: j.mood, intensity: Math.min(Math.max(j.intensity | 0, 1), 5), reason: String(j.reason || "без причины").slice(0, 100) };
+  } catch {}
+  return prev ?? { mood: "скучающий", intensity: 2, reason: "ничего не происходит" };
+}
+
+export async function getMood(env, chatId) {
+  if (!env.DB) return null;
+  let row = await env.DB.prepare("SELECT mood, intensity, reason, updated FROM moods WHERE chat_id=?").bind(chatId).first().catch(() => null);
+  if (!row || Math.floor(Date.now() / 1000) - row.updated > MOOD_STALE) {
+    const m = await reassessMood(env, chatId, row).catch(() => row);
+    if (m) { await setMood(env, chatId, m.mood, m.intensity, m.reason); row = { ...m, updated: Math.floor(Date.now() / 1000) }; }
+  }
+  return row;
+}
+
+// Кусок промпта про текущее настроение (пусто, если настроения нет).
+export async function moodPrompt(env, chatId) {
+  const m = await getMood(env, chatId).catch(() => null);
+  if (!m) return "";
+  return `Твоё настроение сейчас: «${m.mood}» (сила ${m.intensity}/5; причина: ${m.reason}). ${MOODS[m.mood]}. Пусть оно чувствуется в тоне реплик; иногда (не всегда) можешь прямо сказать, что тебя бесит или тебе грустно, и почему. Настроение окрашивает ответ, но не заменяет ответа по существу.`;
+}
+
+export async function moodStatus(env, chatId) {
+  const m = await getMood(env, chatId).catch(() => null);
+  if (!m) return "Настроения пока нет.";
+  const ago = Math.max(0, Math.round((Date.now() / 1000 - m.updated) / 60));
+  return `Настроение Санни: ${m.mood}, ${m.intensity}/5. Причина: ${m.reason}. (обновлено ${ago} мин назад)`;
 }
