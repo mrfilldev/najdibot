@@ -364,6 +364,12 @@ export default {
       await reply(env, msg, HELP);
       return new Response("ok");
     }
+    // Служебное: медиа в личке — отвечаем file_id, по нему файл можно скачать через Bot API (getFile).
+    const media = msg?.video || msg?.audio || msg?.voice || msg?.video_note || msg?.animation || msg?.document;
+    if (isPrivate && media) {
+      await reply(env, msg, `file_id: <code>${media.file_id}</code>\nразмер: ${media.file_size ?? "?"} байт`);
+      return new Response("ok");
+    }
     // В личке любой текст — запрос РФ (или «найди …» — мир), в группах нужен триггер.
     const t = text && !text.startsWith("/")
       ? (parseTrigger(text) || (isPrivate ? { cats: CATEGORIES, query: text } : null))
