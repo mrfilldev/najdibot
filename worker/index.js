@@ -193,6 +193,44 @@ const BOT_ROASTS = [
   "Ты как баг в проде: всем мешаешь, никто не рад. Вали нахуй.",
 ];
 
+// Живая ругань через OpenRouter. При любой ошибке возвращаем null, и вызывающий берёт фразу из BOT_ROASTS.
+async function llmRoast(env, botText, humanText) {
+  if (!env.OPENROUTER_API_KEY) return null;
+  try {
+    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
+      signal: AbortSignal.timeout(15_000),
+      body: JSON.stringify({
+        model: env.LLM_MODEL,
+        max_tokens: 150,
+        messages: [
+          {
+            role: "system",
+            content:
+              "Ты саркастичный Telegram-бот Найдибот в дружеском чате. Другой бот написал сообщение, и ты ругаешь именно его: " +
+              "коротко (1-2 предложения), по-русски, с матом и стёбом над тем, что он написал. Иногда подкалывай, что он просто скрипт. " +
+              "Никаких оскорблений по национальности, полу, вере, здоровью и подобному. Без вступлений и кавычек, только сама реплика.",
+          },
+          {
+            role: "user",
+            content: `Сообщение чужого бота: «${(botText || "(без текста)").slice(0, 500)}»` +
+              (humanText ? `\nЧеловек в чате ответил ему: «${humanText.slice(0, 200)}»` : ""),
+          },
+        ],
+      }),
+    });
+    const d = await r.json();
+    const out = d.choices?.[0]?.message?.content?.trim();
+    return out ? out.slice(0, 500) : null;
+  } catch (e) {
+    console.error("llm failed:", e.message);
+    return null;
+  }
+}
+
+const pickRoast = () => BOT_ROASTS[Math.floor(Math.random() * BOT_ROASTS.length)];
+
 // Антипетля: на одного бота в одном чате не чаще раза в минуту, и не всегда.
 const lastRoast = new Map();
 function shouldRoast(chatId, botId, { cooldown = 60_000, chance = 0.7 } = {}) {
@@ -270,7 +308,7 @@ export default {
     const other = msg?.from?.is_bot ? msg.from : msg?.via_bot;
     if (other && shouldRoast(msg.chat.id, other.id)) {
       console.log("roast bot", other.username);
-      await reply(env, msg, BOT_ROASTS[Math.floor(Math.random() * BOT_ROASTS.length)]);
+      await reply(env, msg, esc((await llmRoast(env, msg.text || msg.caption)) ?? pickRoast()));
       return new Response("ok");
     }
     // Человек ответил чужому боту: бот-автор виден в reply_to_message, ругаемся прямо под его сообщением.
@@ -280,7 +318,7 @@ export default {
       await tg(env, "sendMessage", {
         chat_id: msg.chat.id,
         reply_parameters: { message_id: target.message_id },
-        text: BOT_ROASTS[Math.floor(Math.random() * BOT_ROASTS.length)],
+        text: (await llmRoast(env, target.text || target.caption, msg.text)) ?? pickRoast(),
       });
       return new Response("ok");
     }
