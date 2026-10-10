@@ -46,7 +46,7 @@ const run = (cmd, args, okCodes = [0]) =>
   });
 
 // Короткая причина для пользователя: строка «ERROR: …» из вывода yt-dlp.
-// Кого звать, когда что-то сломалось (не из-за лимитов, а по-настоящему)
+// Кого звать при любой ошибке
 const OWNER = "@Fill_Dev";
 const reason = (e) => {
   const line = String(e.message).split("\n").reverse().find((l) => /ERROR/i.test(l)) ?? String(e.message).split("\n").pop();
@@ -143,7 +143,7 @@ async function download({ chat_id, message_id, url }) {
     await tg("sendMessage", {
       chat_id,
       reply_parameters,
-      text: NO_VIDEO_RE.test(e.message) ? `В этом посте нет видео, а фото достать не вышло. ${OWNER}` : `Не смог скачать: ${reason(e)}${/не влезает/.test(e.message) ? "" : ` ${OWNER}`}`,
+      text: NO_VIDEO_RE.test(e.message) ? `В этом посте нет видео, а фото достать не вышло. ${OWNER}` : `Не смог скачать: ${reason(e)} ${OWNER}`,
     });
   } finally {
     await rm(dir, { recursive: true, force: true });
