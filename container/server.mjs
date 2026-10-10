@@ -7,6 +7,7 @@ import { openAsBlob } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
+import { videoArgs } from "./ytargs.mjs";
 import { writeFileSync } from "node:fs";
 
 const TOKEN = process.env.BOT_TOKEN;
@@ -94,19 +95,13 @@ async function download({ chat_id, message_id, url }) {
   const dir = await mkdtemp(path.join(tmpdir(), "dl-"));
   try {
     await tg("sendChatAction", { chat_id, action: "upload_video" });
-    await runYt([
-      "--no-playlist",
-      "--max-filesize", `${MAX_MB}M`,
-      // H.264 + AAC: AV1/VP9 на части устройств Telegram показывает чёрный экран
-      "-f", `bv*[vcodec^=avc1][height<=720]+ba[acodec^=mp4a]/b[vcodec^=avc1][height<=720]/bv*[height<=720]+ba/b`,
-      "--postprocessor-args", "ffmpeg:-movflags +faststart",
-      "--merge-output-format", "mp4",
-      "-o", path.join(dir, "video.%(ext)s"),
-      url,
-    ]);
+    await runYt(videoArgs({ maxMb: MAX_MB, dir, url }));
     const files = await readdir(dir);
-    const name = files.find((f) => f.endsWith(".mp4")) ?? files[0];
-    if (!name) throw new Error("файла нет (слишком большой?)");
+    const name = files.find((f) => f.endsWith(".mp4"));
+    if (!name) {
+      const len = await out("yt-dlp", [...jsArgs, "--no-playlist", "--skip-download", "--print", "%(duration_string)s", url]).catch(() => "");
+      throw new Error(`ERROR: не влезает: ${len ? `этот ролик ${len}, а` : "ролик слишком длинный или тяжёлый, а"} максимум 25 минут и 50 МБ`);
+    }
     let file = path.join(dir, name);
     file = await ensureH264(file, dir);
     if ((await stat(file)).size > MAX_MB * 1024 * 1024) throw new Error("файл больше 50 МБ");
