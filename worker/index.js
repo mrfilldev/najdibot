@@ -292,6 +292,7 @@ const HELP = [
   "",
   "<b>Музыка</b>",
   "<code>сыграйбля название трека</code> или ссылка — пришлю mp3 (до 15 минут)",
+  "<code>диджейбля название трека</code> — включу трек и сам подберу следующие (до 10 подряд, как «Моя волна»); <code>диджейбля стоп</code> — выключить",
   "",
   "<b>Развлечения</b>",
   "<code>найдибля координаты очко Кирилла</code> — место на карте со стёбом",
@@ -388,7 +389,7 @@ const ABOUT = [
   "",
   "<b>Что умею</b>",
   "• искать товары: <code>найдибля айфон 15</code> (25 магазинов РФ), <code>найди iphone</code> (мир)",
-  "• скачивать видео по ссылке YouTube, TikTok, Instagram; присылать музыку: <code>сыграйбля трек</code>",
+  "• скачивать видео по ссылке YouTube, TikTok, Instagram; присылать музыку: <code>сыграйбля трек</code>, диджеить: <code>диджейбля трек</code>",
   "• голосом рассказывать погоду; казино: <code>депни в казик</code>; координаты со стёбом",
   "• читать фото и ссылки, гуглить, кидать мемы и реакции, доёбываться до людей",
   "• помнить последние ~300 сообщений чата (<code>/forget</code> стирает ваши)",
@@ -436,6 +437,8 @@ const DOEB_RULES = [
 ].join("\n");
 
 const PLAY = /^сыграйбля[\s,:;!.-]+(.{2,})$/is;
+const DJ = /^диджейбля[\s,:;!.-]+(.{2,})$/is;
+const DJ_STOP = /^диджейбля[\s,:;!.-]*(?:стоп|стой|хватит|выключи|отбой|харе)/i;
 const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
 
 export default {
@@ -495,10 +498,10 @@ export default {
       const c = query.match(COORDS);
       // Команды чату («@najdibot доебись до …», вопросы, казино, погода): inline-поиск по магазинам не показываем.
       const commandLike = POKE_RE.test(raw) || POKE_STOP.test(raw) || /^(?:до|при)ебись/i.test(raw) || /^(?:отстань|отвали|хватит|слезь)(?![а-яё])/i.test(raw) || /\?\s*$/.test(raw) ||
-        /^(?:сыграйбля|депни|деп\S*\s+(?:в\s+)?каз)/i.test(raw) || /погод\S*\s+(?:сейчас\s+|щас\s+|сегодня\s+)?(?:в|во)\s+/i.test(raw);
+        /^(?:сыграйбля|диджейбля|депни|деп\S*\s+(?:в\s+)?каз)/i.test(raw) || /погод\S*\s+(?:сейчас\s+|щас\s+|сегодня\s+)?(?:в|во)\s+/i.test(raw);
       // Пока слово набирается и похоже на начало команды («до», «доеб», «сыгр»…), поиск тоже не показываем.
       const first = raw.toLowerCase();
-      const cmdPrefix = raw.length > 0 && !/\s/.test(raw) && ["доебись", "приебись", "отстань", "отвали", "хватит", "слезь", "сыграйбля", "депни"].some((w) => w.startsWith(first));
+      const cmdPrefix = raw.length > 0 && !/\s/.test(raw) && ["доебись", "приебись", "отстань", "отвали", "хватит", "слезь", "сыграйбля", "диджейбля", "депни"].some((w) => w.startsWith(first));
       let results;
       if ((commandLike || cmdPrefix) && !c) {
         results = [];
@@ -768,6 +771,21 @@ export default {
         getContainer(env.DOWNLOADER).fetch("http://container/audio", {
           method: "POST",
           body: JSON.stringify({ chat_id: msg.chat.id, message_id: msg.message_id, query: play[1].trim() }),
+        }),
+      );
+      return new Response("ok");
+    }
+    // «диджейбля <трек>» — стартовый трек, дальше бот сам подбирает следующие (до 10); «диджейбля стоп» — выключить.
+    if (text && DJ_STOP.test(text)) {
+      ctx.waitUntil(getContainer(env.DOWNLOADER).fetch("http://container/dj-stop", { method: "POST", body: JSON.stringify({ chat_id: msg.chat.id }) }));
+      return new Response("ok");
+    }
+    const dj = text && text.match(DJ);
+    if (dj) {
+      ctx.waitUntil(
+        getContainer(env.DOWNLOADER).fetch("http://container/dj", {
+          method: "POST",
+          body: JSON.stringify({ chat_id: msg.chat.id, message_id: msg.message_id, query: dj[1].trim() }),
         }),
       );
       return new Response("ok");

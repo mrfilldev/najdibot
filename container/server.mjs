@@ -150,7 +150,8 @@ async function download({ chat_id, message_id, url }) {
   }
 }
 
-async function audio({ chat_id, message_id, query }) {
+// Скачивает трек и отправляет аудиофайлом. Возвращает {title, performer}; при ошибке бросает.
+async function sendTrack({ chat_id, message_id, query }) {
   const dir = await mkdtemp(path.join(tmpdir(), "au-"));
   try {
     await tg("sendChatAction", { chat_id, action: "upload_voice" });
@@ -172,16 +173,27 @@ async function audio({ chat_id, message_id, query }) {
     const file = path.join(dir, mp3);
     if ((await stat(file)).size > MAX_MB * 1024 * 1024) throw new Error("файл больше 50 МБ");
     const info = JSON.parse(await readFile(path.join(dir, "audio.info.json"), "utf8"));
+    const title = String(info.track || info.title || query).slice(0, 100);
+    const performer = String(info.artist || info.uploader || "").slice(0, 100);
 
     const form = new FormData();
     form.set("chat_id", String(chat_id));
-    form.set("reply_to_message_id", String(message_id));
-    form.set("title", String(info.track || info.title || query).slice(0, 100));
-    form.set("performer", String(info.artist || info.uploader || "").slice(0, 100));
+    if (message_id) form.set("reply_to_message_id", String(message_id));
+    form.set("title", title);
+    form.set("performer", performer);
     if (info.duration) form.set("duration", String(Math.round(info.duration)));
     form.set("audio", await openAsBlob(file, { type: "audio/mpeg" }), `${(info.title || "track").replace(/[\\/:*?"<>|]/g, "")}.mp3`);
     const r = await fetch(`${API}/sendAudio`, { method: "POST", body: form });
     if (!r.ok) throw new Error(`Telegram: ${r.status} ${(await r.text()).slice(0, 200)}`);
+    return { title, performer };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function audio({ chat_id, message_id, query }) {
+  try {
+    await sendTrack({ chat_id, message_id, query });
   } catch (e) {
     console.error("audio failed:", e.message);
     await tg("sendMessage", {
@@ -189,9 +201,74 @@ async function audio({ chat_id, message_id, query }) {
       reply_parameters: { message_id },
       text: `Не смог скачать трек: ${reason(e)} ${OWNER}`,
     });
-  } finally {
-    await rm(dir, { recursive: true, force: true });
   }
+}
+
+// ---- Диджейбля: стартовый трек, дальше LLM сам выбирает следующие (по истории сессии), до DJ_MAX штук ----
+const DJ_MAX = 10;
+const DJ_FAILS = 3; // подряд не скачалось — сворачиваемся
+const djSessions = new Map(); // chat_id -> { stop }
+
+async function djPick(history) {
+  try {
+    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${OR_KEY}`, "content-type": "application/json" },
+      signal: AbortSignal.timeout(20_000),
+      body: JSON.stringify({
+        model: LLM, max_tokens: 60,
+        messages: [
+          { role: "system", content: "Ты диджей, как «Моя волна»: по уже сыгранным трекам выбираешь следующий в том же настроении и жанре, иногда плавно уводя в соседний стиль. Не повторяй сыгранное и не ставь тех же исполнителей подряд. Выбирай реально существующие, известные треки, которые есть на YouTube. Ответ: одна строка «исполнитель - название», без кавычек и пояснений." },
+          { role: "user", content: `Уже сыграно (последний в конце):\n${history.slice(-20).join("\n")}` },
+        ],
+      }),
+    });
+    const line = (await r.json()).choices?.[0]?.message?.content?.trim().split("\n")[0];
+    return line ? line.replace(/^["«]|["»]$/g, "").slice(0, 150) : null;
+  } catch (e) {
+    console.error("dj pick failed:", e.message);
+    return null;
+  }
+}
+
+async function dj({ chat_id, message_id, query }) {
+  if (djSessions.has(chat_id)) djSessions.get(chat_id).stop = true; // новая сессия вытесняет старую
+  const s = { stop: false };
+  djSessions.set(chat_id, s);
+  const history = [];
+  let next = query, played = 0, fails = 0;
+  try {
+    while (!s.stop && played < DJ_MAX) {
+      try {
+        const t = await sendTrack({ chat_id, message_id: played === 0 ? message_id : null, query: next });
+        history.push(`${t.performer} - ${t.title}`.replace(/^ - /, ""));
+        played++;
+        fails = 0;
+      } catch (e) {
+        console.error("dj track failed:", e.message);
+        if (played === 0) {
+          await tg("sendMessage", { chat_id, reply_parameters: { message_id }, text: `Не смог скачать трек: ${reason(e)} ${OWNER}` });
+          return;
+        }
+        history.push(`${next} (не вышло, не предлагай снова)`);
+        if (++fails >= DJ_FAILS) break;
+      }
+      if (s.stop || played >= DJ_MAX) break;
+      next = await djPick(history);
+      if (!next) break;
+    }
+    if (!s.stop && played > 0) {
+      await tg("sendMessage", { chat_id, text: played >= DJ_MAX ? `Всё, ${played} треков отыграл, смена окончена. Ещё? Скажи «диджейбля трек».` : `Закончились идеи, сыграно треков: ${played}.` });
+    }
+  } finally {
+    if (djSessions.get(chat_id) === s) djSessions.delete(chat_id);
+  }
+}
+
+async function djStop({ chat_id }) {
+  const s = djSessions.get(chat_id);
+  if (s) s.stop = true;
+  await tg("sendMessage", { chat_id, text: s ? "Всё, выключаю пластинку." : "Я сейчас и не играю." });
 }
 
 // ---- Погода голосом: Open-Meteo -> LLM пишет реплику -> TTS (OpenRouter) -> ffmpeg (хрипота, тон выше) -> sendVoice ----
@@ -336,7 +413,7 @@ http
       });
       return;
     }
-    const handler = { "/download": download, "/audio": audio, "/weather": weather }[req.url];
+    const handler = { "/download": download, "/audio": audio, "/dj": dj, "/dj-stop": djStop, "/weather": weather }[req.url];
     if (req.method !== "POST" || !handler) {
       res.writeHead(200).end("ok");
       return;
