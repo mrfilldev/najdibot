@@ -1,7 +1,23 @@
 // Аргументы yt-dlp для скачивания видео: вынесены отдельно, чтобы их можно было проверить тестами.
 // Фильтр: `<=?` пропускает и ролики без известной длительности (`?` ставится ПОСЛЕ оператора; `|` как «или» не работает).
 export const MATCH_FILTER = "duration<=?1500";
-export const FORMAT = "bv*[vcodec^=avc1][height<=720]+ba[acodec^=mp4a]/b[vcodec^=avc1][height<=720]/bv*[height<=720]+ba/b";
+// Лесенка качества: берём самое высокое, что по оценке размера влезает в 50 МБ (видеопоток + ~5 МБ на звук).
+// Планка считается по длинной стороне (width и height оба <= side): у вертикальных рилсов height = 1280 при «720p»,
+// и обычное height<=720 отбрасывало их в самый низкий формат.
+// Размер неизвестен (`?`) допускаем только на уровне 720p и ниже; если всё же не влезло, срабатывает --max-filesize.
+const tier = (side, mb, unknown = "") =>
+  `bv*[vcodec^=avc1][height<=${side}][width<=${side}][filesize_approx<=${mb}M]${unknown}+ba[acodec^=mp4a]`;
+export const FORMAT = [
+  tier(1920, 40),
+  tier(1280, 44),
+  tier(1280, 44, "?"),
+  // Инстаграм отдаёт только VP9 без размера в метаданных: берём лучшее до 1080p, в H.264 переведёт ensureH264
+  "bv*[height<=1920][width<=1920]+ba",
+  "bv*[vcodec^=avc1][height<=854][width<=854]+ba[acodec^=mp4a]",
+  "b[vcodec^=avc1][height<=1280][width<=1280]",
+  "bv*[height<=1280][width<=1280]+ba",
+  "b",
+].join("/");
 
 export const videoArgs = ({ maxMb, dir, url }) => [
   "--no-playlist",

@@ -85,8 +85,8 @@ async function ensureH264(file, dir) {
   const fixed = path.join(dir, "fixed.mp4");
   await run("ffmpeg", [
     "-y", "-i", file,
-    "-vf", "scale='min(1280,iw)':-2",
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
+    "-vf", "scale='min(1080,iw)':-2",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-maxrate", "6M", "-bufsize", "12M", "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-movflags", "+faststart", fixed,
   ]);
   return fixed;
