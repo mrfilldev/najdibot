@@ -189,7 +189,7 @@ export async function decide(env, rows, forced, replied = null, extra = "", aske
   const askerText = asker?.text || "";
   const serious = forced && HELP_RE.test(askerText) && !SELF_RE.test(askerText);
   const aboutSelf = forced && SELF_RE.test(`${asker?.text || ""} ${replied?.text || ""}`.slice(0, 600));
-  const out = await complete(env, [{ role: "system", content: (serious ? SERIOUS_SYSTEM : system) + (serious ? (mood.match(/О ком спрашивают[\s\S]*$/)?.[0] ? `\n\n${mood.match(/О ком спрашивают[\s\S]*$/)[0]}` : "") : (mood ? `\n\n${mood}` : "")) + (aboutSelf ? `\n\n${SELF_KNOWLEDGE}` : "") }, { role: "user", content }], { tools, maxTokens: serious ? 2200 : forced ? 1100 : 400 });
+  const out = await complete(env, [{ role: "system", content: (serious ? SERIOUS_SYSTEM : system) + (serious ? (mood.match(/О ком спрашивают[\s\S]*$/)?.[0] ? `\n\n${mood.match(/О ком спрашивают[\s\S]*$/)[0]}` : "") : (mood ? `\n\n${mood}` : "")) + (aboutSelf ? `\n\n${SELF_KNOWLEDGE}` : "") }, { role: "user", content }], { tools, maxTokens: serious ? 2200 : forced ? 1800 : 400 });
   const decision = parseDecision(out, forced);
   if (decision) decision.serious = serious;
   return decision;
@@ -243,12 +243,14 @@ function lengthRule(askText = "", unprompted = false) {
   const short = unprompted || askText.replace(ALIAS_RE, "").trim().length < 15;
   const r = Math.random();
   const creative = /(?<![а-яё])(?:спой|спеть|расскажи|сочини|придумай|напиши|стих\S*|частушк\S*|песн\S*|анекдот\S*|истори\S*|рэп|зачитай|прочитай)/i.test(askText);
-  const tier = creative && !unprompted ? (Math.random() < 0.5 ? 2 : 3) : short ? (r < 0.6 ? 0 : r < 0.9 ? 1 : 2) : (r < 0.3 ? 0 : r < 0.6 ? 1 : r < 0.9 ? 2 : 3);
+  const long = /(?<![а-яё])(?:истори\S*|рассказ\S*|сказк\S*|байк\S*|подробн\S*|продолж\S*|что дальше|и чё будет|и че будет)/i.test(askText);
+  const tier = long && !unprompted ? 4 : creative && !unprompted ? (Math.random() < 0.5 ? 2 : 3) : short ? (r < 0.6 ? 0 : r < 0.9 ? 1 : 2) : (r < 0.3 ? 0 : r < 0.6 ? 1 : r < 0.9 ? 2 : 3);
   const T = [
     "ОДНА короткая фраза или несколько слов, до 100 символов, как будто отмахнулся или бросил реплику на ходу",
     "1-2 коротких предложения, до 250 символов",
     "2-4 предложения, до 500 символов",
     "развёрнуто, 4-6 предложений, до 900 символов",
+    "полноценный рассказ, 8-12 предложений, до 1300 символов, с завязкой, поворотом и концовкой; не обрывай на полуслове",
   ][tier];
   return { rule: `ЖЁСТКОЕ ТРЕБОВАНИЕ К ДЛИНЕ (важнее всех остальных пожеланий про развёрнутость): ${T}. Не пересказывай вопрос и не оправдывайся, сразу к сути.${Math.random() < 0.85 ? " В этой реплике без обращений «бро», «братан», «братишка», «старый» и подобных: называй по имени или вовсе без обращения." : ""}` };
 }
