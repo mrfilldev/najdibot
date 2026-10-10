@@ -46,6 +46,8 @@ const run = (cmd, args, okCodes = [0]) =>
   });
 
 // Короткая причина для пользователя: строка «ERROR: …» из вывода yt-dlp.
+// Кого звать, когда что-то сломалось (не из-за лимитов, а по-настоящему)
+const OWNER = "@Fill_Dev";
 const reason = (e) => {
   const line = String(e.message).split("\n").reverse().find((l) => /ERROR/i.test(l)) ?? String(e.message).split("\n").pop();
   return line.replace(/\[[^\]]+\]\s*/g, "").replace(/https?:\/\/\S+/g, "").slice(0, 160).trim();
@@ -141,7 +143,7 @@ async function download({ chat_id, message_id, url }) {
     await tg("sendMessage", {
       chat_id,
       reply_parameters,
-      text: NO_VIDEO_RE.test(e.message) ? "В этом посте нет видео, а фото достать не вышло." : `Не смог скачать: ${reason(e)}`,
+      text: NO_VIDEO_RE.test(e.message) ? `В этом посте нет видео, а фото достать не вышло. ${OWNER}` : `Не смог скачать: ${reason(e)}${/не влезает/.test(e.message) ? "" : ` ${OWNER}`}`,
     });
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -185,7 +187,7 @@ async function audio({ chat_id, message_id, query }) {
     await tg("sendMessage", {
       chat_id,
       reply_parameters: { message_id },
-      text: `Не смог скачать трек: ${reason(e)}`,
+      text: `Не смог скачать трек: ${reason(e)} ${OWNER}`,
     });
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -293,7 +295,7 @@ async function weather({ chat_id, message_id, city, lat, lon }) {
     if (!r.ok) throw new Error(`Telegram: ${r.status} ${(await r.text()).slice(0, 200)}`);
   } catch (e) {
     console.error("weather failed:", e.message);
-    await tg("sendMessage", { chat_id, reply_parameters: { message_id }, text: "Не смог озвучить погоду, глянь в окно." });
+    await tg("sendMessage", { chat_id, reply_parameters: { message_id }, text: `Не смог озвучить погоду, глянь в окно. ${OWNER}` });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
