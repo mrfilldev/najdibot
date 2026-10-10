@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { ALIAS_RE, APOLOGY_RE, GENDER_HINT, NO_REPEAT, PERSONA_HINT, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, MEME_HINT, OVERBOARD, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { LOUD_RE, QUIET_RE, quietEnd, quietLeft, quietStart, ALIAS_RE, APOLOGY_RE, GENDER_HINT, NO_REPEAT, PERSONA_HINT, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, MEME_HINT, OVERBOARD, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -397,6 +397,9 @@ const ABOUT = [
   "<b>Серьёзный режим</b>",
   "На просьбы «Санни, объясни…», «поищи…», «найди…», «проанализируй…», «сравни…», «посчитай…», «переведи…» (по имени или ответом мне) я отвечаю серьёзно и по делу: сам гуглю, открываю ссылки, разбираю фото. Мата и подколок в таком ответе нет.",
   "",
+  "<b>Потише</b>",
+  "Если я лезу слишком часто: <code>Санни, потише</code> / <code>полегче</code> / <code>сбавь темп</code> (или <code>/quiet</code>). 3 часа не вбрасываю сам и отвечаю только когда обратились по имени или ответом. Вернуть: <code>Санни, громче</code> или <code>/loud</code>.",
+  "",
   "<b>Таймаут</b>",
   "Можно отправить меня спать: <code>Санни, поспи</code>, <code>возьми таймаут на 6 часов</code> или <code>/sleep 6</code> (без числа 6 часов, максимум 24). Пока сплю, молчу полностью, на обращение ставлю только 😴. Разбудить: <code>Санни, проснись</code> или <code>/wake</code>.",
   "",
@@ -581,6 +584,21 @@ export default {
         return new Response("ok");
       }
     }
+    // «Санни, потише / полегче» — на 3 часа он перестаёт вбрасывать сам и отвечает только на прямое обращение; «Санни, громче» или /loud снимает.
+    let quiet = false;
+    if (isGroup && text) {
+      quiet = (await quietLeft(env, msg.chat.id)) > 0;
+      if (LOUD_RE.test(text)) {
+        await quietEnd(env, msg.chat.id);
+        await reply(env, msg, quiet ? "Всё, снова в строю, шумим как раньше." : "Я и так в обычном режиме.");
+        return new Response("ok");
+      }
+      if (QUIET_RE.test(text)) {
+        await quietStart(env, msg.chat.id);
+        await reply(env, msg, ["Понял, сбавляю темп. Сам лезть не буду, если что — зовите.", "Ок, притихаю на пару часов. Позовёте по имени — отвечу.", "Принял, буду реже. Сам не вмешиваюсь, пока не окликнете."][Math.floor(Math.random() * 3)]);
+        return new Response("ok");
+      }
+    }
     if (isGroup && text && /^\/(relations|отношения)(@\w+)?(?![\w-])/i.test(text)) {
       await reply(env, msg, esc(await feelingsStatus(env, msg.chat.id)));
       return new Response("ok");
@@ -613,7 +631,7 @@ export default {
       }
       // Специальные триггеры (голосовые, казино, погода, музыка, ссылки на видео) важнее продолжения доёба.
       const special = SYMPHONY.test(text) || GAV_CALL.test(text) || CASINO.test(text) || WEATHER.test(text) || PLAY.test(text) || VIDEO_URL.test(text) || MOD_CMD.test(text);
-      if (!text.startsWith("/") && !special && (await pokeContinue(env, (m, b) => tg(env, m, b), msg).catch(() => false))) {
+      if (!quiet && !text.startsWith("/") && !special && (await pokeContinue(env, (m, b) => tg(env, m, b), msg).catch(() => false))) {
         return new Response("ok");
       }
     }
@@ -704,7 +722,7 @@ export default {
     }
     // Сообщение от чужого бота (или через его inline) — посылаем.
     const other = msg?.from?.is_bot ? msg.from : msg?.via_bot;
-    if (other && shouldRoast(msg.chat.id, other.id, { chance: 0.1 })) { // 1 к 10: чужих ботов не трогаем постоянно
+    if (!quiet && other && shouldRoast(msg.chat.id, other.id, { chance: 0.1 })) { // 1 к 10: чужих ботов не трогаем постоянно
       console.log("roast bot", other.username);
       const bn = other.username ?? null;
       await setMood(env, msg.chat.id, "ревнивый", 4, "люди пользуются чужим ботом");
@@ -716,7 +734,7 @@ export default {
     // Человек ответил чужому боту: бот-автор виден в reply_to_message, ругаемся прямо под его сообщением.
     const target = msg?.reply_to_message;
     const ownId = Number(env.BOT_TOKEN.split(":")[0]);
-    if (target?.from?.is_bot && target.from.id !== ownId && shouldRoast(msg.chat.id, target.from.id, { cooldown: 5_000, chance: 1 })) {
+    if (!quiet && target?.from?.is_bot && target.from.id !== ownId && shouldRoast(msg.chat.id, target.from.id, { cooldown: 5_000, chance: 1 })) {
       const mood0 = await moodPrompt(env, msg.chat.id);
       await setMood(env, msg.chat.id, "ревнивый", 4, "люди отвечают чужому боту");
       await tg(env, "sendMessage", {
@@ -772,7 +790,7 @@ export default {
       // Недавно говорили с этим человеком: LLM решает по смыслу, к боту ли его реплика без имени (ответы другим людям пропускаем сразу).
       const addressed = ownUsername || toUs;
       const toSomeoneElse = msg.reply_to_message && msg.reply_to_message.from?.id !== ownId;
-      const inConvo = !addressed && !toSomeoneElse && (await convoRecent(env, msg.chat.id, msg.from.id).catch(() => false)) && (await isForBot(env, msg));
+      const inConvo = !quiet && !addressed && !toSomeoneElse && (await convoRecent(env, msg.chat.id, msg.from.id).catch(() => false)) && (await isForBot(env, msg));
       // Извинился перед ботом: выводим отношение в +2 (раньше ответа, чтобы тон уже был мягче).
       if ((addressed || inConvo) && APOLOGY_RE.test(text)) {
         await apologize(env, msg.chat.id, msg.from.id, msg.from.first_name).catch(() => {});
@@ -789,10 +807,10 @@ export default {
         await reply(env, msg, POKE_BYE[Math.floor(Math.random() * POKE_BYE.length)]);
         return new Response("ok");
       }
-      if (await maybeChat(env, msg, (m, b) => tg(env, m, b), { forced: addressed || inConvo })) {
+      if ((addressed || !quiet) && (await maybeChat(env, msg, (m, b) => tg(env, m, b), { forced: addressed || inConvo }))) {
         return new Response("ok");
       }
-      if (shouldBark(msg.chat.id)) {
+      if (!quiet && shouldBark(msg.chat.id)) {
         await reply(env, msg, BARKS[Math.floor(Math.random() * BARKS.length)]);
       }
     }
