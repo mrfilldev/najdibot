@@ -26,3 +26,19 @@ describe("аргументы yt-dlp для видео", () => {
     expect(run({ duration: 5000 })).toBe("False");
   });
 });
+
+import { NO_VIDEO_RE, instagramEmbedUrl, parseEmbedImage } from "../container/ytargs.mjs";
+
+describe("Instagram-посты без видео", () => {
+  it("узнаёт ошибку yt-dlp", () => expect(NO_VIDEO_RE.test("ERROR: [Instagram] X: There is no video in this post")).toBe(true));
+  it("строит ссылку на embed из /p/, /reel/ и с query", () => {
+    expect(instagramEmbedUrl("https://www.instagram.com/p/DeQcxuBzcSG/?dlrf=MW15")).toBe("https://www.instagram.com/p/DeQcxuBzcSG/embed/captioned/");
+    expect(instagramEmbedUrl("https://instagram.com/reel/AbC_d-1/")).toContain("/p/AbC_d-1/embed/");
+    expect(instagramEmbedUrl("https://youtube.com/x")).toBeNull();
+  });
+  it("достаёт картинку и раскодирует &amp;", () => {
+    const html = '<img class="EmbeddedMediaImage" alt="x" src="https://cdn.example/a.jpg?stp=1&amp;_nc=2">';
+    expect(parseEmbedImage(html)).toBe("https://cdn.example/a.jpg?stp=1&_nc=2");
+    expect(parseEmbedImage("<html></html>")).toBeNull();
+  });
+});

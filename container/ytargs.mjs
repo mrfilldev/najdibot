@@ -15,3 +15,15 @@ export const videoArgs = ({ maxMb, dir, url }) => [
   "-o", `${dir}/video.%(ext)s`,
   url,
 ];
+
+// Instagram-пост без видео (одни фото): yt-dlp говорит «There is no video in this post».
+// Картинку берём со страницы встраивания (без логина); для карусели доступна только первая.
+export const NO_VIDEO_RE = /There is no video in this post/i;
+export const instagramEmbedUrl = (url) => {
+  const m = String(url).match(/instagram\.com\/(?:p|reels?|tv)\/([\w-]+)/i);
+  return m ? `https://www.instagram.com/p/${m[1]}/embed/captioned/` : null;
+};
+export const parseEmbedImage = (html) => {
+  const m = String(html).match(/class="EmbeddedMediaImage"[^>]*?src="([^"]+)"/);
+  return m ? m[1].replace(/&amp;/g, "&").replace(/&#0?38;/g, "&") : null;
+};

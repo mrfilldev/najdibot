@@ -7,7 +7,7 @@ import { openAsBlob } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
-import { videoArgs } from "./ytargs.mjs";
+import { NO_VIDEO_RE, instagramEmbedUrl, parseEmbedImage, videoArgs } from "./ytargs.mjs";
 import { writeFileSync } from "node:fs";
 
 const TOKEN = process.env.BOT_TOKEN;
@@ -90,6 +90,28 @@ async function ensureH264(file, dir) {
   return fixed;
 }
 
+// Пост-картинка из Instagram: достаём фото со страницы встраивания и шлём как фото. true, если отправили.
+async function sendInstagramPhoto({ chat_id, message_id, url }) {
+  try {
+    const embed = instagramEmbedUrl(url);
+    if (!embed) return false;
+    const html = await (await fetch(embed, { headers: { "user-agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(15_000) })).text();
+    const img = parseEmbedImage(html);
+    if (!img) return false;
+    const bin = await fetch(img, { signal: AbortSignal.timeout(20_000) });
+    if (!bin.ok) return false;
+    const form = new FormData();
+    form.set("chat_id", String(chat_id));
+    form.set("reply_to_message_id", String(message_id));
+    form.set("photo", new Blob([await bin.arrayBuffer()], { type: "image/jpeg" }), "photo.jpg");
+    const r = await fetch(`${API}/sendPhoto`, { method: "POST", body: form });
+    return r.ok;
+  } catch (e) {
+    console.error("instagram photo failed:", e.message);
+    return false;
+  }
+}
+
 async function download({ chat_id, message_id, url }) {
   const reply_parameters = { message_id };
   const dir = await mkdtemp(path.join(tmpdir(), "dl-"));
@@ -115,10 +137,11 @@ async function download({ chat_id, message_id, url }) {
     if (!r.ok) throw new Error(`Telegram: ${r.status} ${(await r.text()).slice(0, 200)}`);
   } catch (e) {
     console.error("download failed:", e.message);
+    if (NO_VIDEO_RE.test(e.message) && (await sendInstagramPhoto({ chat_id, message_id, url }))) return;
     await tg("sendMessage", {
       chat_id,
       reply_parameters,
-      text: `Не смог скачать: ${reason(e)}`,
+      text: NO_VIDEO_RE.test(e.message) ? "В этом посте нет видео, а фото достать не вышло." : `Не смог скачать: ${reason(e)}`,
     });
   } finally {
     await rm(dir, { recursive: true, force: true });
