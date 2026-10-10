@@ -1,6 +1,6 @@
-# najdibot: handoff (2026-10-09, конец сессии)
+# najdibot: handoff (2026-10-10, конец сессии)
 
-**Состояние.** @najdibot работает на Cloudflare: Worker (`worker/index.js`, `chat.js`, `mod.js`) + Container с yt-dlp/ffmpeg (`container/`) + D1 (память чата, таблицы `messages`, `warns`). Деплой: `DOCKER_CONTEXT=desktop-linux npx wrangler deploy`. После деплоя живой контейнер остаётся на старом коде: `POST /restart` с `X-Telegram-Bot-Api-Secret-Token` (= WEBHOOK_SECRET); `POST /debug {"query"}` даёт реальную ошибку загрузки. Список навыков: `README.md`, `/help`.
+**Состояние.** @najdibot работает на Cloudflare: Worker (`worker/index.js`, `chat.js`, `mod.js`) + Container с yt-dlp/ffmpeg (`container/`) + D1 (таблицы `messages`, `warns`, `pokes`, `convos`, `moods`, `feelings`, `sleeps`; схемы в `db/*.sql`). Деплой: `DOCKER_CONTEXT=desktop-linux npx wrangler deploy`. После деплоя живой контейнер остаётся на старом коде: `POST /restart` с `X-Telegram-Bot-Api-Secret-Token` (= WEBHOOK_SECRET); `POST /debug {"query"}` даёт реальную ошибку загрузки. Список навыков: `README.md`, `/help`.
 
 **Решения и грабли.**
 - yt-dlp: сначала анонимно, потом с cookies (`runYt`), обязателен `--js-runtimes node`. С cookies с IP Cloudflare YouTube даёт 403. Ролики 18+ пока не скачиваются.
