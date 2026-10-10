@@ -278,6 +278,7 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
     const urls = [...new Set([...(msg.text || "").matchAll(URL_RE), ...((rep?.text || rep?.caption || "").matchAll(URL_RE))].map((m) => m[0]))].slice(0, 2);
     const extra = forced && urls.length ? (await Promise.all(urls.map(async (u) => `[${u}]\n${await openUrl(u)}`))).join("\n\n").slice(0, 9000) : "";
     const mood = (await moodPrompt(env, chatId, forced ? { id: msg.from?.id, name: msg.from?.first_name } : null)) + (forced ? `\n${await relationPrompt(env, chatId, msg.from.id, msg.from?.first_name || "собеседник")}\n${await relationsSummary(env, chatId)}` : "");
+    const roleText = rolePrompt(await roleGet(env, chatId));
     let about = "";
     if (forced) {
       const known = await factsPrompt(env, chatId, [msg.from?.first_name, ...rows.map((r) => r.name)]).catch(() => "");
@@ -286,7 +287,7 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
     }
     const asker = forced ? { name: msg.from?.first_name || msg.from?.username || "собеседник", text: (msg.text || msg.caption || "").slice(0, 700) } : null;
     const feel = forced ? await loadFeeling(env, chatId, msg.from.id).catch(() => null) : null;
-    let d = await decide(env, rows, forced, replied, extra, asker, mood + (about ? `\n${about}` : "")).catch((e) => (console.error("decide", e.message), null));
+    let d = await decide(env, rows, forced, replied, extra, asker, mood + (about ? `\n${about}` : "") + (roleText ? `\n${roleText}` : "")).catch((e) => (console.error("decide", e.message), null));
     // На прямое обращение молчать нельзя: один повтор, потом запасная фраза.
     if (forced && d?.action !== "text") d = await decide(env, rows, forced, replied, extra, asker, mood).catch(() => null);
     // человеку с плюсом мат недопустим: одна попытка переписать, иначе маскируем матерные слова
@@ -903,3 +904,24 @@ export async function factsPrompt(env, chatId, names) {
   if (!lines.length) return "";
   return `Что ты помнишь о людях (долгая память; упоминай к месту и естественно, не перечисляй списком, не выдумывай сверх этого):\n${lines.join("\n")}`;
 }
+
+// ---- Роль: «Санни, прикинься Вархаммером» на пару часов, «выйди из роли» снимает ----
+export const ROLE_RE = new RegExp(`${BOT_NAMES}[\\s,:]*(?:а\\s+)?(?:ну\\s+)?(?:давай\\s+)?(?:прикинься|притворись|изобрази|сыграй\\s+роль|играй\\s+роль|веди\\s+себя\\s+как|говори\\s+как)\\s+(?:что\\s+ты\\s+|будто\\s+ты\\s+|как\\s+)?([^\\n]{2,80})`, "i");
+export const ROLE_OFF_RE = new RegExp(`${BOT_NAMES}[\\s,:]*(?:выйди\\s+из\\s+роли|хватит\\s+(?:притворяться|прикидываться|играть)|стань\\s+собой|будь\\s+собой|снова\\s+будь\\s+собой|отмени\\s+роль)|^\\/role_off(@\\w+)?(?![\\w-])`, "i");
+const ROLE_HOURS = 2;
+
+export async function roleStart(env, chatId, role, hours = ROLE_HOURS) {
+  const until = Math.floor(Date.now() / 1000) + hours * 3600;
+  await env.DB.prepare("INSERT OR REPLACE INTO roles (chat_id, role, until) VALUES (?,?,?)").bind(chatId, role, until).run();
+}
+
+export async function roleGet(env, chatId) {
+  const row = await env.DB.prepare("SELECT role, until FROM roles WHERE chat_id=?").bind(chatId).first().catch(() => null);
+  return row && row.until > Math.floor(Date.now() / 1000) ? row.role : null;
+}
+
+export async function roleEnd(env, chatId) {
+  await env.DB.prepare("DELETE FROM roles WHERE chat_id=?").bind(chatId).run().catch(() => {});
+}
+
+export const rolePrompt = (role) => role ? `РОЛЬ (приоритет выше обычной манеры речи): тебя попросили прикинуться «${role}», и сейчас ты играешь эту роль: говоришь, шутишь и реагируешь в образе, используя лексику, фразы и атмосферу персонажа или темы, не выходи из образа сам и не поясняй, что играешь. Остаются в силе: правила про мат и отношение к собеседнику, запреты на оскорбления, длина ответа.` : "";

@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { LOUD_RE, QUIET_RE, quietEnd, quietLeft, quietStart, ALIAS_RE, APOLOGY_RE, STYLE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, updateFacts, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { ROLE_OFF_RE, ROLE_RE, roleEnd, roleGet, roleStart, LOUD_RE, QUIET_RE, quietEnd, quietLeft, quietStart, ALIAS_RE, APOLOGY_RE, STYLE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, updateFacts, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 
@@ -597,6 +597,22 @@ export default {
       if (QUIET_RE.test(text)) {
         await quietStart(env, msg.chat.id);
         await reply(env, msg, ["Понял, сбавляю темп. Сам лезть не буду, если что — зовите.", "Ок, притихаю на пару часов. Позовёте по имени — отвечу.", "Принял, буду реже. Сам не вмешиваюсь, пока не окликнете."][Math.floor(Math.random() * 3)]);
+        return new Response("ok");
+      }
+    }
+    // Роль: «Санни, прикинься Вархаммером» на 2 часа; «Санни, выйди из роли» или /role_off снимает.
+    if (isGroup && text) {
+      if (ROLE_OFF_RE.test(text)) {
+        const had = await roleGet(env, msg.chat.id);
+        await roleEnd(env, msg.chat.id);
+        await reply(env, msg, had ? "Ладно, выхожу из образа. Снова я." : "Я и так без роли, чего ты.");
+        return new Response("ok");
+      }
+      const rm = text.match(ROLE_RE);
+      if (rm) {
+        const role = rm[1].replace(/[.!?…]+$/, "").trim();
+        await roleStart(env, msg.chat.id, role);
+        await reply(env, msg, esc(`Принято, ближайшие 2 часа я «${role}». Выйти из роли: «Санни, выйди из роли».`));
         return new Response("ok");
       }
     }
