@@ -281,8 +281,8 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
     let about = "";
     if (forced) {
       const known = await factsPrompt(env, chatId, [msg.from?.first_name, ...rows.map((r) => r.name)]).catch(() => "");
-      about = known;
-      about += await mentionedPeople(env, chatId, [msg.text || msg.caption || "", rep?.text || rep?.caption || ""], msg.from?.id).catch(() => "") ? `\n${await mentionedPeople(env, chatId, [msg.text || msg.caption || "", rep?.text || rep?.caption || ""], msg.from?.id).catch(() => "")}` : "";
+      const ment = await mentionedPeople(env, chatId, [msg.text || msg.caption || "", rep?.text || rep?.caption || ""], msg.from?.id).catch(() => "");
+      about = [known, ment].filter(Boolean).join("\n");
     }
     const asker = forced ? { name: msg.from?.first_name || msg.from?.username || "собеседник", text: (msg.text || msg.caption || "").slice(0, 700) } : null;
     const feel = forced ? await loadFeeling(env, chatId, msg.from.id).catch(() => null) : null;
@@ -855,4 +855,51 @@ export async function quietLeft(env, chatId) {
 
 export async function quietEnd(env, chatId) {
   await env.DB.prepare("DELETE FROM quiets WHERE chat_id=?").bind(chatId).run().catch(() => {});
+}
+
+
+// ---- Долгая память: устойчивые факты о людях ----
+const FACTS_MAX = 10; // фактов на человека
+const FACTS_SYSTEM = `Ты ведёшь досье на участников дружеского чата. Тебе дают текущие факты о людях и свежую переписку. Верни ОБНОВЛЁННЫЕ факты ТОЛЬКО JSON-объектом {"Имя":["факт","факт"]} по людям, у которых есть что добавить или поправить (остальных не включай).
+Факт: короткий (до 80 символов), устойчивый и полезный для будущих разговоров: работа/учёба, город, увлечения, питомцы, техника, планы, вкусы, повторяющиеся шутки и конфликты. Не записывай разовые реплики, настроение на сегодня, чужие слова о человеке без подтверждения. Сарказм и шутки не считай фактами. НЕ записывай здоровье, ориентацию, религию, национальность, политику, финансы и адреса. Если новое противоречит старому, оставь новое. Максимум ${FACTS_MAX} фактов на человека, самые важные. Без пояснений вне JSON.`;
+
+// Раз в полдня: из свежей переписки обновляем досье (старые факты + новые → пересобранный список).
+export async function updateFacts(env, chatId, hours = 12) {
+  if (!env.DB || !env.OPENROUTER_API_KEY) return 0;
+  const since = Math.floor(Date.now() / 1000) - hours * 3600;
+  const { results: rows } = await env.DB.prepare("SELECT user_id, name, text FROM messages WHERE chat_id=? AND ts>? AND user_id!=0 ORDER BY id ASC LIMIT 300")
+    .bind(chatId, since).all();
+  if (rows.length < 8) return 0;
+  const people = new Map(); // имя -> user_id
+  for (const r of rows) people.set(r.name, r.user_id);
+  const { results: old } = await env.DB.prepare("SELECT user_id, name, facts FROM facts WHERE chat_id=?").bind(chatId).all();
+  const oldBlock = old.filter((o) => people.has(o.name) && o.facts).map((o) => `${o.name}: ${o.facts.split("\n").join("; ")}`).join("\n") || "(пока пусто)";
+  let log = rows.map((r) => `${r.name}: ${String(r.text).slice(0, 300)}`).join("\n");
+  if (log.length > 20000) log = log.slice(-20000);
+  const out = await ask(env, FACTS_SYSTEM, `Текущие факты:\n${oldBlock}\n\nПереписка:\n${log}`, 1200, null, 0.2);
+  const json = out && out.match(/\{[\s\S]*\}/);
+  if (!json) return 0;
+  let parsed;
+  try { parsed = JSON.parse(json[0]); } catch { return 0; }
+  let n = 0;
+  for (const [name, list] of Object.entries(parsed)) {
+    const uid = people.get(name);
+    if (uid === undefined || !Array.isArray(list)) continue;
+    const facts = list.map((f) => String(f).replace(/\s+/g, " ").trim().slice(0, 100)).filter(Boolean).slice(0, FACTS_MAX).join("\n");
+    if (!facts) continue;
+    await env.DB.prepare("INSERT INTO facts (chat_id, user_id, name, facts, updated) VALUES (?,?,?,?,?) ON CONFLICT(chat_id, user_id) DO UPDATE SET name=excluded.name, facts=excluded.facts, updated=excluded.updated")
+      .bind(chatId, uid, name, facts, Math.floor(Date.now() / 1000)).run();
+    n++;
+  }
+  return n;
+}
+
+// Кусок промпта: что Санни помнит о людях из недавней переписки (по именам).
+export async function factsPrompt(env, chatId, names) {
+  const set = new Set(names.filter(Boolean));
+  if (!set.size) return "";
+  const { results } = await env.DB.prepare("SELECT name, facts FROM facts WHERE chat_id=?").bind(chatId).all();
+  const lines = results.filter((r) => set.has(r.name) && r.facts).map((r) => `${r.name}: ${r.facts.split("\n").join("; ")}`);
+  if (!lines.length) return "";
+  return `Что ты помнишь о людях (долгая память; упоминай к месту и естественно, не перечисляй списком, не выдумывай сверх этого):\n${lines.join("\n")}`;
 }
