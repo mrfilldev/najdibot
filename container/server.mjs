@@ -151,7 +151,7 @@ async function download({ chat_id, message_id, url }) {
 }
 
 // Скачивает трек и отправляет аудиофайлом. Возвращает {title, performer}; при ошибке бросает.
-async function sendTrack({ chat_id, message_id, query }) {
+async function sendTrack({ chat_id, message_id, query, accept }) {
   const dir = await mkdtemp(path.join(tmpdir(), "au-"));
   try {
     await tg("sendChatAction", { chat_id, action: "upload_voice" });
@@ -173,6 +173,7 @@ async function sendTrack({ chat_id, message_id, query }) {
     const file = path.join(dir, mp3);
     if ((await stat(file)).size > MAX_MB * 1024 * 1024) throw new Error("файл больше 50 МБ");
     const info = JSON.parse(await readFile(path.join(dir, "audio.info.json"), "utf8"));
+    if (accept && !accept(info)) throw Object.assign(new Error("повтор"), { dup: true });
     const title = String(info.track || info.title || query).slice(0, 100);
     const performer = String(info.artist || info.uploader || "").slice(0, 100);
 
@@ -218,7 +219,7 @@ async function djPick(history) {
       body: JSON.stringify({
         model: LLM, max_tokens: 60,
         messages: [
-          { role: "system", content: "Ты диджей, как «Моя волна»: по уже сыгранным трекам выбираешь следующий в том же настроении и жанре, иногда плавно уводя в соседний стиль. Не повторяй сыгранное и не ставь тех же исполнителей подряд. Выбирай реально существующие, известные треки, которые есть на YouTube. Ответ: одна строка «исполнитель - название», без кавычек и пояснений." },
+          { role: "system", content: "Ты диджей, как «Моя волна»: по уже сыгранным трекам выбираешь следующий в том же настроении и жанре, иногда плавно уводя в соседний стиль. Строго не повторяй сыгранное (и то, что помечено как повтор) и не ставь одного исполнителя больше двух раз подряд. Выбирай реально существующие, известные треки, которые есть на YouTube. Ответ: одна строка «исполнитель - название», без кавычек и пояснений." },
           { role: "user", content: `Уже сыграно (последний в конце):\n${history.slice(-20).join("\n")}` },
         ],
       }),
@@ -236,11 +237,13 @@ async function dj({ chat_id, message_id, query }) {
   const s = { stop: false };
   djSessions.set(chat_id, s);
   const history = [];
+  const seen = new Set(); // id уже сыгранных видео: повторы отсекаем кодом, LLM их всё равно подкидывает
+  const accept = (info) => !info.id || !seen.has(info.id) && !!seen.add(info.id);
   let next = query, played = 0, fails = 0;
   try {
     while (!s.stop && played < DJ_MAX) {
       try {
-        const t = await sendTrack({ chat_id, message_id: played === 0 ? message_id : null, query: next });
+        const t = await sendTrack({ chat_id, message_id: played === 0 ? message_id : null, query: next, accept });
         history.push(`${t.performer} - ${t.title}`.replace(/^ - /, ""));
         played++;
         fails = 0;
@@ -250,7 +253,7 @@ async function dj({ chat_id, message_id, query }) {
           await tg("sendMessage", { chat_id, reply_parameters: { message_id }, text: `Не смог скачать трек: ${reason(e)} ${OWNER}` });
           return;
         }
-        history.push(`${next} (не вышло, не предлагай снова)`);
+        history.push(e.dup ? `${next} (уже играл, выбери ДРУГОЙ трек другого исполнителя)` : `${next} (не вышло, не предлагай снова)`);
         if (++fails >= DJ_FAILS) break;
       }
       if (s.stop || played >= DJ_MAX) break;
