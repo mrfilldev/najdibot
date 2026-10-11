@@ -163,6 +163,82 @@ function tg(env, method, body) {
   });
 }
 
+// Статус «гружу» на время загрузки видео: сразу статичная фраза, потом (если успеет) живая от модели. Удаляет сообщение контейнер.
+const LOADING_PHRASES = {
+  tiktok: ["листаю тикток вместо работы", "ныряю в тикток щас вернусь", "тикток грузится я не железный"],
+  instagram: ["ныряю в рилсы щас вернусь", "достаю рилс из инсты пинцетом", "листаю рилсы ради тебя"],
+  youtube: ["смотрю шортс ради тебя", "качаю ютуб только не рекламу", "уговариваю ютуб отдать видос"],
+  other: ["уговариваю сервер отдать видос", "ффмпег пыхтит терпи", "грею контейнер", "пересобираю пиксели", "видос тяжёлый я не железный"],
+};
+
+function videoSite(url) {
+  const s = (String(url).match(/https?:\/\/(?:[\w-]+\.)*?([\w-]+)\.[a-z]+(?:\/|$)/i)?.[1] ?? "other").toLowerCase();
+  return s === "youtu" ? "youtube" : s;
+}
+
+// Медиана полного времени успешных загрузок с этого сайта, округлённая до 5 сек. null, если данных мало.
+async function typicalSeconds(env, site) {
+  const { results } = await env.DB.prepare(
+    "SELECT dl_ms + COALESCE(recode_ms, 0) + COALESCE(send_ms, 0) AS ms FROM downloads WHERE ok = 1 AND site = ? AND dl_ms IS NOT NULL ORDER BY id DESC LIMIT 20",
+  ).bind(site).all();
+  if (results.length < 5) return null;
+  const ms = results.map((r) => r.ms).sort((a, b) => a - b);
+  return Math.max(5, Math.round(ms[Math.floor(ms.length / 2)] / 5000) * 5);
+}
+
+async function llmLoading(env, site, mood) {
+  if (!env.OPENROUTER_API_KEY) return null;
+  try {
+    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
+      signal: AbortSignal.timeout(2500),
+      body: JSON.stringify({
+        model: env.LLM_MODEL,
+        max_tokens: 40,
+        messages: [
+          {
+            role: "system",
+            content: STYLE + "\n\nТы качаешь видео по ссылке из чата и пишешь статус, пока оно грузится, как остроумный экран загрузки в приложении. " +
+              "Одна короткая фраза, до 7 слов, маленькими буквами, без запятых, без точки в конце, без кавычек и без времени. Можно ссылаться на платформу. " + (mood || ""),
+          },
+          { role: "user", content: `платформа: ${site}` },
+        ],
+      }),
+    });
+    const out = (await r.json()).choices?.[0]?.message?.content?.trim().replace(/^["«]|["».]$/g, "");
+    return out && out.length <= 80 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+async function startDownload(env, msg, url) {
+  const chat_id = msg.chat.id;
+  const site = videoSite(url);
+  let status_id = null;
+  try {
+    const list = LOADING_PHRASES[site] ?? LOADING_PHRASES.other;
+    const secs = await typicalSeconds(env, site).catch(() => null);
+    const suffix = secs ? ` · ~${secs} сек` : "";
+    const sent = await (await tg(env, "sendMessage", {
+      chat_id, reply_parameters: { message_id: msg.message_id }, text: list[Math.floor(Math.random() * list.length)] + suffix,
+    })).json();
+    status_id = sent.result?.message_id ?? null;
+    if (status_id) {
+      moodPrompt(env, chat_id).catch(() => "").then((mood) => llmLoading(env, site, mood)).then((line) =>
+        line && tg(env, "editMessageText", { chat_id, message_id: status_id, text: line + suffix }),
+      ).catch(() => {});
+    }
+  } catch (e) {
+    console.error("loading status failed:", e.message);
+  }
+  await getContainer(env.DOWNLOADER).fetch("http://container/download", {
+    method: "POST",
+    body: JSON.stringify({ chat_id, message_id: msg.message_id, url, user_id: msg.from?.id, status_id }),
+  });
+}
+
 async function reply(env, msg, text) {
   await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
     method: "POST",
@@ -805,12 +881,7 @@ export default {
     // Ссылка на YouTube/TikTok в любом сообщении — скачиваем видео.
     const link = text && text.match(VIDEO_URL);
     if (link) {
-      ctx.waitUntil(
-        getContainer(env.DOWNLOADER).fetch("http://container/download", {
-          method: "POST",
-          body: JSON.stringify({ chat_id: msg.chat.id, message_id: msg.message_id, url: link[0], user_id: msg.from?.id }),
-        }),
-      );
+      ctx.waitUntil(startDownload(env, msg, link[0]));
       return new Response("ok");
     }
     const c = t && t.query.match(COORDS);

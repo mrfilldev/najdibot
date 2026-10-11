@@ -129,7 +129,7 @@ async function reportDownload(rec) {
   }
 }
 
-async function download({ chat_id, message_id, url, user_id }) {
+async function download({ chat_id, message_id, url, user_id, status_id }) {
   const reply_parameters = { message_id };
   const dir = await mkdtemp(path.join(tmpdir(), "dl-"));
   const rec = { chat_id, user_id, url, ok: 0 };
@@ -180,6 +180,7 @@ async function download({ chat_id, message_id, url, user_id }) {
       text: NO_VIDEO_RE.test(e.message) ? `В этом посте нет видео, а фото достать не вышло. ${OWNER}` : `Не смог скачать: ${reason(e)} ${OWNER}`,
     });
   } finally {
+    if (status_id) await tg("deleteMessage", { chat_id, message_id: status_id }).catch(() => {});
     await rm(dir, { recursive: true, force: true });
     await reportDownload(rec);
   }
