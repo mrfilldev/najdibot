@@ -114,14 +114,31 @@ async function sendInstagramPhoto({ chat_id, message_id, url }) {
   }
 }
 
-async function download({ chat_id, message_id, url }) {
+// Отчёт о загрузке воркеру (он пишет в D1). Не критично: при любой ошибке молча пропускаем.
+async function reportDownload(rec) {
+  try {
+    if (!process.env.WORKER_URL || !process.env.WEBHOOK_SECRET) return;
+    await fetch(`${process.env.WORKER_URL}/log-download`, {
+      method: "POST",
+      headers: { "X-Telegram-Bot-Api-Secret-Token": process.env.WEBHOOK_SECRET, "content-type": "application/json" },
+      body: JSON.stringify(rec),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (e) {
+    console.error("report failed:", e.message);
+  }
+}
+
+async function download({ chat_id, message_id, url, user_id }) {
   const reply_parameters = { message_id };
   const dir = await mkdtemp(path.join(tmpdir(), "dl-"));
+  const rec = { chat_id, user_id, url, ok: 0 };
   try {
     await tg("sendChatAction", { chat_id, action: "upload_video" });
     const t0 = Date.now();
     await runYt(videoArgs({ maxMb: MAX_MB, dir, url }));
     const tDl = Date.now();
+    rec.dl_ms = tDl - t0;
     const files = await readdir(dir);
     const name = files.find((f) => f.endsWith(".mp4"));
     if (!name) {
@@ -131,6 +148,7 @@ async function download({ chat_id, message_id, url }) {
     let file = path.join(dir, name);
     file = await ensureH264(file, dir);
     const tEnc = Date.now();
+    rec.recode_ms = tEnc - tDl;
     if ((await stat(file)).size > MAX_MB * 1024 * 1024) throw new Error("файл больше 50 МБ");
 
     const form = new FormData();
@@ -149,9 +167,12 @@ async function download({ chat_id, message_id, url }) {
     form.set("video", await openAsBlob(file, { type: "video/mp4" }), "video.mp4");
     const r = await fetch(`${API}/sendVideo`, { method: "POST", body: form });
     if (!r.ok) throw new Error(`Telegram: ${r.status} ${(await r.text()).slice(0, 200)}`);
-    console.log(`timing ms: download=${tDl - t0} recode=${tEnc - tDl} send=${Date.now() - tEnc}`);
+    rec.send_ms = Date.now() - tEnc;
+    rec.ok = 1;
+    console.log(`timing ms: download=${rec.dl_ms} recode=${rec.recode_ms} send=${rec.send_ms}`);
   } catch (e) {
     console.error("download failed:", e.message);
+    rec.error = reason(e);
     if (NO_VIDEO_RE.test(e.message) && (await sendInstagramPhoto({ chat_id, message_id, url }))) return;
     await tg("sendMessage", {
       chat_id,
@@ -160,6 +181,7 @@ async function download({ chat_id, message_id, url }) {
     });
   } finally {
     await rm(dir, { recursive: true, force: true });
+    await reportDownload(rec);
   }
 }
 

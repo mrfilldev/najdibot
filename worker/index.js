@@ -177,10 +177,10 @@ async function reply(env, msg, text) {
   });
 }
 
-// Контейнер с yt-dlp: поднимается по запросу и засыпает через 10 минут простоя.
+// Контейнер с yt-dlp: поднимается по запросу и засыпает через 3 минуты простоя.
 export class Downloader extends Container {
   defaultPort = 8080;
-  sleepAfter = "10m";
+  sleepAfter = "3m";
   constructor(ctx, env) {
     super(ctx, env);
     this.envVars = {
@@ -188,6 +188,8 @@ export class Downloader extends Container {
       YT_COOKIES_GZB64: env.YT_COOKIES_GZB64 ?? "",
       OPENROUTER_API_KEY: env.OPENROUTER_API_KEY ?? "",
       LLM_MODEL: env.LLM_MODEL ?? "",
+      WEBHOOK_SECRET: env.WEBHOOK_SECRET,
+      WORKER_URL: new URL(env.WORKER_URL ?? "https://najdibot.mrfilldev.workers.dev").origin,
     };
   }
 }
@@ -468,6 +470,16 @@ export default {
       if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("forbidden", { status: 403 });
       await getContainer(env.DOWNLOADER).destroy();
       return new Response("container destroyed");
+    }
+    // Отчёт контейнера о загрузке видео: пишем в журнал downloads.
+    if (new URL(request.url).pathname === "/log-download") {
+      if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("forbidden", { status: 403 });
+      const r = await request.json();
+      const site = (String(r.url).match(/https?:\/\/(?:[\w-]+\.)*?([\w-]+)\.[a-z]+(?:\/|$)/i)?.[1] ?? "other").toLowerCase().replace(/^youtu$/, "youtube");
+      await env.DB.prepare("INSERT INTO downloads (ts, chat_id, user_id, site, url, ok, error, dl_ms, recode_ms, send_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(Math.floor(Date.now() / 1000), r.chat_id, r.user_id ?? null, site, String(r.url).slice(0, 300), r.ok ? 1 : 0, r.error ?? null, r.dl_ms ?? null, r.recode_ms ?? null, r.send_ms ?? null)
+        .run();
+      return new Response("ok");
     }
     // Служебное: POST /debug {query} (с секретом вебхука) — пробный запуск загрузки в контейнере, возвращает реальную ошибку.
     if (new URL(request.url).pathname === "/debug") {
@@ -796,7 +808,7 @@ export default {
       ctx.waitUntil(
         getContainer(env.DOWNLOADER).fetch("http://container/download", {
           method: "POST",
-          body: JSON.stringify({ chat_id: msg.chat.id, message_id: msg.message_id, url: link[0] }),
+          body: JSON.stringify({ chat_id: msg.chat.id, message_id: msg.message_id, url: link[0], user_id: msg.from?.id }),
         }),
       );
       return new Response("ok");
