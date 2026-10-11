@@ -6,7 +6,7 @@ compatibility_date = "2026-10-01"
 class_name = "Downloader"
 image = "./container/Dockerfile"
 max_instances = 1
-instance_type = "basic"
+instance_type = "standard-3"
 
 [[durable_objects.bindings]]
 name = "DOWNLOADER"
@@ -27,3 +27,6 @@ database_id = "1ca1697d-9a02-4e72-88a4-190214746e8c"
 # Сводка чата: 15:00 и 21:00 UTC (18:00 и 00:00 по Москве и Кипру, UTC+3)
 [triggers]
 crons = ["0 15,21 * * *"]
+
+[observability]
+enabled = true

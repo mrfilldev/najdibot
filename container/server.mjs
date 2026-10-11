@@ -119,7 +119,9 @@ async function download({ chat_id, message_id, url }) {
   const dir = await mkdtemp(path.join(tmpdir(), "dl-"));
   try {
     await tg("sendChatAction", { chat_id, action: "upload_video" });
+    const t0 = Date.now();
     await runYt(videoArgs({ maxMb: MAX_MB, dir, url }));
+    const tDl = Date.now();
     const files = await readdir(dir);
     const name = files.find((f) => f.endsWith(".mp4"));
     if (!name) {
@@ -128,6 +130,7 @@ async function download({ chat_id, message_id, url }) {
     }
     let file = path.join(dir, name);
     file = await ensureH264(file, dir);
+    const tEnc = Date.now();
     if ((await stat(file)).size > MAX_MB * 1024 * 1024) throw new Error("файл больше 50 МБ");
 
     const form = new FormData();
@@ -146,6 +149,7 @@ async function download({ chat_id, message_id, url }) {
     form.set("video", await openAsBlob(file, { type: "video/mp4" }), "video.mp4");
     const r = await fetch(`${API}/sendVideo`, { method: "POST", body: form });
     if (!r.ok) throw new Error(`Telegram: ${r.status} ${(await r.text()).slice(0, 200)}`);
+    console.log(`timing ms: download=${tDl - t0} recode=${tEnc - tDl} send=${Date.now() - tEnc}`);
   } catch (e) {
     console.error("download failed:", e.message);
     if (NO_VIDEO_RE.test(e.message) && (await sendInstagramPhoto({ chat_id, message_id, url }))) return;
