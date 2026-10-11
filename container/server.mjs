@@ -83,11 +83,16 @@ async function ensureH264(file, dir) {
   if (codec === "h264") return file;
   console.log("recoding from", codec);
   const fixed = path.join(dir, "fixed.mp4");
+  // Битрейт ограничиваем бюджетом под 50 МБ: на длинных роликах 6M даёт файл больше лимита
+  const dur = parseFloat(await out("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file]).catch(() => "")) || 0;
+  const budgetK = dur > 0 ? Math.floor((MAX_MB * 8192 * 0.9) / dur) - 128 : 6000;
+  const maxK = Math.max(300, Math.min(6000, budgetK));
+  const side = maxK < 1500 ? 720 : 1080;
   await run("ffmpeg", [
     "-y", "-i", file,
-    "-vf", "scale='min(1080,iw)':-2",
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-maxrate", "6M", "-bufsize", "12M", "-pix_fmt", "yuv420p",
-    "-c:a", "aac", "-movflags", "+faststart", fixed,
+    "-vf", `scale='min(${side},iw)':-2`,
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-maxrate", `${maxK}k`, "-bufsize", `${maxK * 2}k`, "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", fixed,
   ]);
   return fixed;
 }
