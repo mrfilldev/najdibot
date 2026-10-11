@@ -134,6 +134,15 @@ async function download({ chat_id, message_id, url }) {
     form.set("chat_id", String(chat_id));
     form.set("reply_to_message_id", String(message_id));
     form.set("supports_streaming", "true");
+    // Без явных размеров Telegram иногда рисует вертикальное видео сплюснутым
+    const [width, height, duration] = (await out("ffprobe", [
+      "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,duration", "-of", "csv=p=0", file,
+    ]).catch(() => "")).split(",");
+    if (width > 0 && height > 0) {
+      form.set("width", width);
+      form.set("height", height);
+      if (duration > 0) form.set("duration", String(Math.round(duration)));
+    }
     form.set("video", await openAsBlob(file, { type: "video/mp4" }), "video.mp4");
     const r = await fetch(`${API}/sendVideo`, { method: "POST", body: form });
     if (!r.ok) throw new Error(`Telegram: ${r.status} ${(await r.text()).slice(0, 200)}`);
