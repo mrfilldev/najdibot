@@ -42,7 +42,7 @@ const run = (cmd, args, okCodes = [0]) =>
     const p = spawn(cmd, args);
     let err = "";
     p.stderr.on("data", (d) => (err += d));
-    p.on("close", (code) => (okCodes.includes(code) ? resolve() : reject(new Error(err.slice(-600)))));
+    p.on("close", (code) => (okCodes.includes(code) ? resolve(err.slice(-1500)) : reject(new Error(err.slice(-600)))));
   });
 
 // Короткая причина для пользователя: строка «ERROR: …» из вывода yt-dlp.
@@ -141,12 +141,13 @@ async function download({ chat_id, message_id, url, user_id, status_id }) {
   try {
     await tg("sendChatAction", { chat_id, action: "upload_video" });
     const t0 = Date.now();
-    await runYt(videoArgs({ maxMb: MAX_MB, dir, url }));
+    const ytLog = await runYt(videoArgs({ maxMb: MAX_MB, dir, url }));
     const tDl = Date.now();
     rec.dl_ms = tDl - t0;
     const files = await readdir(dir);
     const name = files.find((f) => f.endsWith(".mp4"));
     if (!name) {
+      console.error("no mp4 after yt-dlp; files:", files.join(","), "log:", String(ytLog).slice(-600));
       const len = await out("yt-dlp", [...jsArgs, "--no-playlist", "--skip-download", "--print", "%(duration_string)s", url]).catch(() => "");
       throw new Error(`ERROR: не влезает: ${len ? `этот ролик ${len}, а` : "ролик слишком длинный или тяжёлый, а"} максимум 25 минут и 50 МБ`);
     }
@@ -430,15 +431,14 @@ async function probe({ query, extra = [], nocookies = false }) {
     const t0 = Date.now();
     const probeArgs = [
       "--no-playlist", ...extra,
-      "--max-filesize", `${MAX_MB}M`, "--match-filters", "duration<900",
+      "--max-filesize", `${MAX_MB}M`, "--match-filters", "duration<=?900",
       "-x", "--audio-format", "mp3", "--audio-quality", "192K", "--max-downloads", "1",
       "-o", path.join(dir, "audio.%(ext)s"), src,
     ];
     // nocookies=true — строго анонимно (без повтора), иначе реальный путь бота: анонимно, затем cookies
-    if (nocookies) await run("yt-dlp", [...jsArgs, ...probeArgs], [0, 101]);
-    else await runYt(probeArgs, [0, 101]);
+    const log = nocookies ? await run("yt-dlp", [...jsArgs, ...probeArgs], [0, 101]) : await runYt(probeArgs, [0, 101]);
     const files = await readdir(dir);
-    return { ok: true, files, ms: Date.now() - t0, cookies: cookieArgs.length > 0 && !nocookies };
+    return { ok: true, files, log: files.length ? undefined : String(log).slice(-500), ms: Date.now() - t0, cookies: cookieArgs.length > 0 && !nocookies };
   } catch (e) {
     return { ok: false, error: String(e.message).split("\n").filter((l) => /ERROR/.test(l)).slice(-2).join(" | ").slice(0, 400), cookies: cookieArgs.length > 0 && !nocookies };
   } finally {
