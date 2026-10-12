@@ -439,7 +439,7 @@ async function probe({ query, extra = [], nocookies = false, video = false }) {
     if (video) probeArgs.splice(0, probeArgs.length, ...videoArgs({ maxMb: MAX_MB, dir, url: src }), ...extra);
     const log = nocookies ? await run("yt-dlp", [...jsArgs, ...probeArgs], [0, 101]) : await runYt(probeArgs, [0, 101]);
     const files = await readdir(dir);
-    return { ok: true, files, log: files.length ? undefined : String(log).slice(-500), ms: Date.now() - t0, cookies: cookieArgs.length > 0 && !nocookies };
+    return { ok: true, files, log: files.length && !video ? undefined : String(log).slice(-1500), ms: Date.now() - t0, cookies: cookieArgs.length > 0 && !nocookies };
   } catch (e) {
     return { ok: false, error: String(e.message).split("\n").filter((l) => /ERROR/.test(l)).slice(-2).join(" | ").slice(0, 400), cookies: cookieArgs.length > 0 && !nocookies };
   } finally {
