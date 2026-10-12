@@ -904,7 +904,10 @@ export default {
     // Ни один триггер не сработал: участвуем в беседе (если обратились — всегда), иначе иногда лаем.
     if (text && !isPrivate && !text.startsWith("/")) {
       const ownUsername = ALIAS_RE.test(text); // @najdibot, найдибот, Санни, Sunny, Саныч…
-      const toUs = msg.reply_to_message?.from?.id === ownId;
+      const rt = msg.reply_to_message;
+      // Ответ на видео, которое прислал сам бот (скачанный ролик): к нему не цепляемся, если не позвали по имени.
+      if (!ownUsername && rt?.from?.id === ownId && (rt.video || rt.animation || rt.video_note)) return new Response("ok");
+      const toUs = rt?.from?.id === ownId;
       // Недавно говорили с этим человеком: LLM решает по смыслу, к боту ли его реплика без имени (ответы другим людям пропускаем сразу).
       const addressed = ownUsername || toUs;
       const toSomeoneElse = msg.reply_to_message && msg.reply_to_message.from?.id !== ownId;
