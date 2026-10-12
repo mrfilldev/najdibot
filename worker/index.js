@@ -3,6 +3,7 @@ import { MOD_CMD, moderate } from "./mod.js";
 import { ROLE_OFF_RE, ROLE_RE, roleEnd, roleGet, roleStart, LOUD_RE, QUIET_RE, quietEnd, quietLeft, quietStart, ALIAS_RE, APOLOGY_RE, STYLE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, updateFacts, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
+import { dl, tgBase } from "./remote.js";
 
 // Inline-бот: на @najdibot <запрос> отдаёт ссылки поиска по площадкам.
 // Telegram шлёт сюда апдейты вебхуком, мы отвечаем вызовом answerInlineQuery.
@@ -156,7 +157,7 @@ function buildResults(query, cats = CATEGORIES) {
 }
 
 function tg(env, method, body) {
-  return fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
+  return fetch(`${tgBase(env)}/bot${env.BOT_TOKEN}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -233,14 +234,14 @@ async function startDownload(env, msg, url) {
   } catch (e) {
     console.error("loading status failed:", e.message);
   }
-  await getContainer(env.DOWNLOADER).fetch("http://container/download", {
+  await dl(env, "/download", {
     method: "POST",
     body: JSON.stringify({ chat_id, message_id: msg.message_id, url, user_id: msg.from?.id, status_id }),
   });
 }
 
 async function reply(env, msg, text) {
-  await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
+  await fetch(`${tgBase(env)}/bot${env.BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -402,7 +403,7 @@ async function sendVoice(env, msg, b64, duration, name) {
   form.set("reply_to_message_id", String(msg.message_id));
   form.set("duration", String(duration));
   form.set("voice", new Blob([bytes], { type: "audio/ogg" }), name);
-  await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendVoice`, { method: "POST", body: form });
+  await fetch(`${tgBase(env)}/bot${env.BOT_TOKEN}/sendVoice`, { method: "POST", body: form });
 }
 
 const sendGav = (env, msg) => sendVoice(env, msg, GAV_OGG_B64, GAV_DURATION, "gav.ogg");
@@ -544,6 +545,7 @@ export default {
     // Служебное: POST /restart (с секретом вебхука) — убить живой экземпляр контейнера, чтобы после деплоя поднялась новая версия.
     if (new URL(request.url).pathname === "/restart") {
       if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("forbidden", { status: 403 });
+      if (env.DOWNLOADER_URL) return dl(env, "/restart", { method: "POST" });
       await getContainer(env.DOWNLOADER).destroy();
       return new Response("container destroyed");
     }
@@ -560,7 +562,7 @@ export default {
     // Служебное: POST /debug {query} (с секретом вебхука) — пробный запуск загрузки в контейнере, возвращает реальную ошибку.
     if (new URL(request.url).pathname === "/debug") {
       if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("forbidden", { status: 403 });
-      return getContainer(env.DOWNLOADER).fetch("http://container/probe", { method: "POST", body: await request.text() });
+      return dl(env, "/probe", { method: "POST", body: await request.text() });
     }
     // Telegram присылает наш секрет в заголовке; чужие запросы отбрасываем.
     if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) {
@@ -604,7 +606,7 @@ export default {
       }
       // Служебное: inline_query с id "dbg" возвращает результат в HTTP-ответе (проверка без Telegram).
       if (inline.id === "dbg") return Response.json({ raw, commandLike, cmdPrefix, coords: !!c, results: results.length });
-      await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/answerInlineQuery`, {
+      await fetch(`${tgBase(env)}/bot${env.BOT_TOKEN}/answerInlineQuery`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -763,7 +765,7 @@ export default {
     if (city && Date.now() - (lastWeather.get(msg.chat.id) ?? 0) > 20_000) {
       lastWeather.set(msg.chat.id, Date.now());
       ctx.waitUntil(
-        getContainer(env.DOWNLOADER).fetch("http://container/weather", {
+        dl(env, "/weather", {
           method: "POST",
           body: JSON.stringify({ chat_id: msg.chat.id, message_id: msg.message_id, city: city[3], lat: city[1], lon: city[2] }),
         }),
@@ -856,7 +858,7 @@ export default {
     const play = text && text.match(PLAY);
     if (play) {
       ctx.waitUntil(
-        getContainer(env.DOWNLOADER).fetch("http://container/audio", {
+        dl(env, "/audio", {
           method: "POST",
           body: JSON.stringify({ chat_id: msg.chat.id, message_id: msg.message_id, query: play[1].trim() }),
         }),
@@ -865,13 +867,13 @@ export default {
     }
     // «диджейбля <трек>» — стартовый трек, дальше бот сам подбирает следующие (до 10); «диджейбля стоп» — выключить.
     if (text && DJ_STOP.test(text)) {
-      ctx.waitUntil(getContainer(env.DOWNLOADER).fetch("http://container/dj-stop", { method: "POST", body: JSON.stringify({ chat_id: msg.chat.id }) }));
+      ctx.waitUntil(dl(env, "/dj-stop", { method: "POST", body: JSON.stringify({ chat_id: msg.chat.id }) }));
       return new Response("ok");
     }
     const dj = text && text.match(DJ);
     if (dj) {
       ctx.waitUntil(
-        getContainer(env.DOWNLOADER).fetch("http://container/dj", {
+        dl(env, "/dj", {
           method: "POST",
           body: JSON.stringify({ chat_id: msg.chat.id, message_id: msg.message_id, query: dj[1].trim() }),
         }),

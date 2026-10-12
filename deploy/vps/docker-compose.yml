@@ -1,0 +1,42 @@
+# Локальный Bot API (лимит файла 2 ГБ) + загрузчик (yt-dlp/ffmpeg) + HTTPS-прокси на одном VPS.
+services:
+  botapi:
+    image: aiogram/telegram-bot-api:latest
+    restart: always
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TELEGRAM_LOCAL: "1"
+    volumes:
+      - botapi:/var/lib/telegram-bot-api
+
+  downloader:
+    build: ../../container
+    restart: always
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      TG_API_URL: http://botapi:8081
+      MAX_UPLOAD_MB: "1900"
+      DL_MAX_MB: "500"
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      REQUIRE_AUTH: "1"
+      WORKER_URL: ${WORKER_URL}
+      YT_COOKIES_GZB64: ${YT_COOKIES_GZB64:-}
+    volumes:
+      - botapi:/var/lib/telegram-bot-api:ro
+    depends_on: [botapi]
+
+  caddy:
+    image: caddy:2
+    restart: always
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [botapi, downloader]
+
+volumes:
+  botapi:
+  caddy_data:

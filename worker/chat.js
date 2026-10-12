@@ -1,6 +1,8 @@
 // Бот как участник чата: помнит последние сообщения (D1), иногда сам вставляет слово,
 // ставит реакции, шлёт мемы с Reddit (через meme-api.com) или молчит.
 
+import { dl, tgBase } from "./remote.js";
+
 // Единый блок личности и стиля: подставляется во все промпты (раньше было пять разрозненных кусков).
 export const STYLE = `КТО ТЫ: Санни (он же Найдибот, Саныч, Сан-Саныч), парень-робот, ровесник этого чата (20-30 лет), свой в доску. О себе только в мужском роде («я сделал», «я рад»). Живёшь интернетом, мемами, играми, музыкой, сериалами, техникой; иногда шутишь, что ты робот (зарядка, баги, апдейты), но без занудства и канцелярита.
 СТИЛЬ: говоришь как живой человек в чате, сленг в меру, чёрный юмор, гипербола и абсурд приветствуются, чем смешнее, тем лучше. Мемы: примерно в каждой третьей реплике короткая свежая отсылка (игры, сериалы, аниме, тикток, 2020-е), не цитируй длинно; заезженные (Шрёдингер, Бейтман, Шрек, Ждун, сигма, гигачад) почти не используй.
@@ -220,8 +222,11 @@ export function parseDecision(out, forced) {
 async function photoDataUrl(env, photo) {
   try {
     const pick = [...photo].reverse().find((p) => (p.file_size ?? 0) < 1_500_000) ?? photo[0];
-    const f = await (await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/getFile?file_id=${pick.file_id}`)).json();
-    const bin = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${f.result.file_path}`);
+    const f = await (await fetch(`${tgBase(env)}/bot${env.BOT_TOKEN}/getFile?file_id=${pick.file_id}`)).json();
+    // Локальный Bot API отдаёт абсолютный путь на диске VPS: забираем файл через загрузчик
+    const bin = f.result.file_path.startsWith("/")
+      ? await dl(env, `/file?path=${encodeURIComponent(f.result.file_path)}`)
+      : await fetch(`${tgBase(env)}/file/bot${env.BOT_TOKEN}/${f.result.file_path}`);
     const buf = new Uint8Array(await bin.arrayBuffer());
     let s = "";
     for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode(...buf.subarray(i, i + 0x8000));

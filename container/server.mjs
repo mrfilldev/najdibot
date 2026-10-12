@@ -3,7 +3,7 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
-import { openAsBlob } from "node:fs";
+import { createReadStream, openAsBlob } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -11,9 +11,13 @@ import { NO_VIDEO_RE, instagramEmbedUrl, parseEmbedImage, videoArgs } from "./yt
 import { writeFileSync } from "node:fs";
 
 const TOKEN = process.env.BOT_TOKEN;
-const MAX_MB = 50; // лимит Bot API на отправку файла
-const DL_MAX_MB = 300; // скачиваем с запасом: тяжёлое видео ужимаем ffmpeg до MAX_MB
-const API = `https://api.telegram.org/bot${TOKEN}`;
+// Облачный Bot API принимает файлы до 50 МБ; со своим локальным сервером (TG_API_URL) лимит 2 ГБ.
+const MAX_MB = Number(process.env.MAX_UPLOAD_MB) || 50;
+const DL_MAX_MB = Number(process.env.DL_MAX_MB) || 300; // скачиваем с запасом: тяжёлое видео ужимаем ffmpeg до MAX_MB
+const API = `${(process.env.TG_API_URL || "https://api.telegram.org").replace(/\/$/, "")}/bot${TOKEN}`;
+const AUTH_SECRET = process.env.WEBHOOK_SECRET; // на VPS контейнер доступен из интернета: требуем секрет (в Cloudflare его закрывает Durable Object)
+const REQUIRE_AUTH = process.env.REQUIRE_AUTH === "1";
+const BOTAPI_DIR = process.env.BOTAPI_DIR || "/var/lib/telegram-bot-api"; // общий том с локальным Bot API: сюда он кладёт скачанные файлы
 
 // Cookies YouTube (нужны для роликов 18+ и против «подтвердите, что вы не бот»).
 // Приходят секретом как gzip+base64 текста cookies.txt; yt-dlp пишет в файл, поэтому кладём в /tmp.
@@ -449,7 +453,31 @@ async function probe({ query, extra = [], nocookies = false, video = false }) {
 }
 
 http
-  .createServer((req, res) => {
+  .createServer(async (req, res) => {
+    if (REQUIRE_AUTH && (!AUTH_SECRET || req.headers["x-telegram-bot-api-secret-token"] !== AUTH_SECRET)) {
+      res.writeHead(403).end("forbidden");
+      return;
+    }
+    if (req.method === "POST" && req.url === "/restart") {
+      res.writeHead(200).end("restarting");
+      setTimeout(() => process.exit(0), 100); // docker compose поднимет заново (restart: always)
+      return;
+    }
+    // Файл с диска локального Bot API (getFile отдаёт там абсолютный путь)
+    if (req.method === "GET" && req.url.startsWith("/file?")) {
+      const p = path.resolve(new URL(req.url, "http://x").searchParams.get("path") || "");
+      if (!p.startsWith(BOTAPI_DIR + path.sep)) {
+        res.writeHead(400).end("bad path");
+        return;
+      }
+      try {
+        res.writeHead(200, { "content-length": (await stat(p)).size });
+        createReadStream(p).pipe(res);
+      } catch {
+        res.destroy();
+      }
+      return;
+    }
     if (req.method === "POST" && req.url === "/probe") {
       let b = "";
       req.on("data", (c) => (b += c));

@@ -1,0 +1,8 @@
+{$DOMAIN} {
+	# Bot API: токен в пути служит паролем, как и у api.telegram.org
+	@botapi path /bot* /file/*
+	reverse_proxy @botapi botapi:8081
+
+	# Загрузчик: проверяет секрет вебхука сам (REQUIRE_AUTH=1)
+	reverse_proxy downloader:8080
+}
