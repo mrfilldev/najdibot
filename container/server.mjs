@@ -12,6 +12,7 @@ import { writeFileSync } from "node:fs";
 
 const TOKEN = process.env.BOT_TOKEN;
 const MAX_MB = 50; // лимит Bot API на отправку файла
+const DL_MAX_MB = 300; // скачиваем с запасом: тяжёлое видео ужимаем ffmpeg до MAX_MB
 const API = `https://api.telegram.org/bot${TOKEN}`;
 
 // Cookies YouTube (нужны для роликов 18+ и против «подтвердите, что вы не бот»).
@@ -80,7 +81,7 @@ async function ensureH264(file, dir) {
     "-v", "error", "-select_streams", "v:0",
     "-show_entries", "stream=codec_name", "-of", "csv=p=0", file,
   ]);
-  if (codec === "h264") return file;
+  if (codec === "h264" && (await stat(file)).size <= MAX_MB * 1024 * 1024) return file;
   console.log("recoding from", codec);
   const fixed = path.join(dir, "fixed.mp4");
   // Битрейт ограничиваем бюджетом под 50 МБ: на длинных роликах 6M даёт файл больше лимита
@@ -141,7 +142,7 @@ async function download({ chat_id, message_id, url, user_id, status_id }) {
   try {
     await tg("sendChatAction", { chat_id, action: "upload_video" });
     const t0 = Date.now();
-    const ytLog = await runYt(videoArgs({ maxMb: MAX_MB, dir, url }));
+    const ytLog = await runYt(videoArgs({ maxMb: DL_MAX_MB, dir, url }));
     const tDl = Date.now();
     rec.dl_ms = tDl - t0;
     const files = await readdir(dir);
@@ -436,7 +437,7 @@ async function probe({ query, extra = [], nocookies = false, video = false }) {
       "-o", path.join(dir, "audio.%(ext)s"), src,
     ];
     // nocookies=true — строго анонимно (без повтора), иначе реальный путь бота: анонимно, затем cookies
-    if (video) probeArgs.splice(0, probeArgs.length, ...videoArgs({ maxMb: MAX_MB, dir, url: src }), ...extra);
+    if (video) probeArgs.splice(0, probeArgs.length, ...videoArgs({ maxMb: DL_MAX_MB, dir, url: src }), ...extra);
     const log = nocookies ? await run("yt-dlp", [...jsArgs, ...probeArgs], [0, 101]) : await runYt(probeArgs, [0, 101]);
     const files = await readdir(dir);
     return { ok: true, files, log: files.length && !video ? undefined : String(log).slice(-1500), ms: Date.now() - t0, cookies: cookieArgs.length > 0 && !nocookies };
