@@ -424,7 +424,7 @@ async function weather({ chat_id, message_id, city, lat, lon }) {
 }
 
 // Служебное: та же загрузка, что в audio(), но без отправки в Telegram; результат возвращается в ответе.
-async function probe({ query, extra = [], nocookies = false }) {
+async function probe({ query, extra = [], nocookies = false, video = false }) {
   const dir = await mkdtemp(path.join(tmpdir(), "pr-"));
   try {
     const src = /^https?:\/\//i.test(query) ? query : `ytsearch5:${query}`;
@@ -436,6 +436,7 @@ async function probe({ query, extra = [], nocookies = false }) {
       "-o", path.join(dir, "audio.%(ext)s"), src,
     ];
     // nocookies=true — строго анонимно (без повтора), иначе реальный путь бота: анонимно, затем cookies
+    if (video) probeArgs.splice(0, probeArgs.length, ...videoArgs({ maxMb: MAX_MB, dir, url: src }), ...extra);
     const log = nocookies ? await run("yt-dlp", [...jsArgs, ...probeArgs], [0, 101]) : await runYt(probeArgs, [0, 101]);
     const files = await readdir(dir);
     return { ok: true, files, log: files.length ? undefined : String(log).slice(-500), ms: Date.now() - t0, cookies: cookieArgs.length > 0 && !nocookies };
