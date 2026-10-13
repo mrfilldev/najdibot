@@ -42,9 +42,10 @@ const tg = (method, body) =>
     body: JSON.stringify(body),
   });
 
-const run = (cmd, args, okCodes = [0]) =>
+const run = (cmd, args, okCodes = [0], onOut = null) =>
   new Promise((resolve, reject) => {
     const p = spawn(cmd, args);
+    if (onOut) p.stdout.on("data", (d) => onOut(String(d)));
     let err = "";
     p.stderr.on("data", (d) => (err += d));
     p.on("close", (code) => (okCodes.includes(code) ? resolve(err.slice(-1500)) : reject(new Error(err.slice(-600)))));
@@ -73,13 +74,13 @@ const reason = (e) => {
 
 // yt-dlp для YouTube: сначала анонимно (cookies с IP датацентра YouTube начинает отвергать, 403),
 // при ошибке повтор с cookies (нужны для роликов 18+).
-async function runYt(args, okCodes = [0]) {
+async function runYt(args, okCodes = [0], onOut = null) {
   try {
-    return await run("yt-dlp", [...jsArgs, ...args], okCodes);
+    return await run("yt-dlp", [...jsArgs, ...args], okCodes, onOut);
   } catch (e) {
     if (!cookieArgs.length) throw e;
     console.log("retry with cookies:", reason(e));
-    return run("yt-dlp", [...jsArgs, ...cookieArgs, ...args], okCodes);
+    return run("yt-dlp", [...jsArgs, ...cookieArgs, ...args], okCodes, onOut);
   }
 }
 
@@ -93,7 +94,7 @@ const out = (cmd, args) =>
   });
 
 // Если видео не H.264 — перекодируем, иначе на части телефонов будет чёрный экран.
-async function ensureH264(file, dir) {
+async function ensureH264(file, dir, onProgress = () => {}) {
   const codec = await out("ffprobe", [
     "-v", "error", "-select_streams", "v:0",
     "-show_entries", "stream=codec_name", "-of", "csv=p=0", file,
@@ -106,12 +107,18 @@ async function ensureH264(file, dir) {
   const budgetK = dur > 0 ? Math.floor((MAX_MB * 8192 * 0.9) / dur) - 128 : 6000;
   const maxK = Math.max(300, Math.min(6000, budgetK));
   const side = maxK < 1500 ? 720 : 1080;
+  let tail = "";
   await run("ffmpeg", [
-    "-y", "-i", file,
+    "-y", "-nostats", "-progress", "pipe:1", "-i", file,
     "-vf", `scale='min(${side},iw)':-2`,
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-maxrate", `${maxK}k`, "-bufsize", `${maxK * 2}k`, "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", fixed,
-  ]);
+  ], [0], (chunk) => {
+    // ffmpeg -progress: строки «out_time_us=123456»; чанк может резать строку, поэтому копим хвост
+    tail = (tail + chunk).split("\n").slice(-3).join("\n");
+    const m = [...tail.matchAll(/out_time_us=(\d+)/g)].pop();
+    if (m && dur > 0) onProgress(Number(m[1]) / 1e6 / dur);
+  });
   return fixed;
 }
 
@@ -151,14 +158,18 @@ async function reportDownload(rec) {
   }
 }
 
-async function download({ chat_id, message_id, url, user_id, status_id, phrases = [], expected_s = null }) {
+async function download({ chat_id, message_id, url, user_id, status_id, phrases = [] }) {
   const reply_parameters = { message_id };
-  // Пока качаем, раз в 5 сек двигаем полосу прогресса (по времени, до 95%) и меняем фразу
-  const started = Date.now();
-  const expectedMs = (expected_s || 30) * 1000;
+  // Реальный прогресс: этапы со своими долями шкалы (скачивание, перекодирование, отправка), шкала только растёт
+  const STAGES = { dl: [0, 0.15], enc: [0.15, 0.7], send: [0.85, 0.15] };
+  let overall = 0;
+  const setProg = (stage, frac) => {
+    const [base, w] = STAGES[stage];
+    overall = Math.max(overall, base + w * Math.min(1, Math.max(0, frac || 0)));
+  };
   let current = null;
   const bar = () => {
-    const p = Math.min(0.95, (Date.now() - started) / expectedMs);
+    const p = Math.min(0.99, overall);
     const n = Math.round(p * 10);
     return `${"▰".repeat(n)}${"▱".repeat(10 - n)} ${Math.round(p * 100)}%`;
   };
@@ -172,7 +183,15 @@ async function download({ chat_id, message_id, url, user_id, status_id, phrases 
   try {
     await tg("sendChatAction", { chat_id, action: "upload_video" });
     const t0 = Date.now();
-    const ytLog = await runYt(videoArgs({ maxMb: DL_MAX_MB, dir, url }));
+    const ytLog = await runYt(
+      [...videoArgs({ maxMb: DL_MAX_MB, dir, url }), "--newline", "--progress-template", "download:%(progress._percent_str)s"],
+      [0],
+      (chunk) => {
+        const m = [...chunk.matchAll(/(\d+(?:\.\d+)?)%/g)].pop();
+        if (m) setProg("dl", Number(m[1]) / 100);
+      },
+    );
+    setProg("dl", 1);
     const tDl = Date.now();
     rec.dl_ms = tDl - t0;
     const files = await readdir(dir);
@@ -183,7 +202,8 @@ async function download({ chat_id, message_id, url, user_id, status_id, phrases 
       throw new Error(`ERROR: не влезает: ${len ? `этот ролик ${len}, а` : "ролик слишком длинный или тяжёлый, а"} максимум 25 минут и 50 МБ`);
     }
     let file = path.join(dir, name);
-    file = await ensureH264(file, dir);
+    file = await ensureH264(file, dir, (f) => setProg("enc", f));
+    setProg("enc", 1);
     const tEnc = Date.now();
     rec.recode_ms = tEnc - tDl;
     if ((await stat(file)).size > MAX_MB * 1024 * 1024) throw new Error("файл больше 50 МБ");

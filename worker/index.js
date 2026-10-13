@@ -249,7 +249,7 @@ async function startDownload(env, msg, url) {
   }
   await dl(env, "/download", {
     method: "POST",
-    body: JSON.stringify({ chat_id, message_id: msg.message_id, url, user_id: msg.from?.id, status_id, phrases: list, expected_s: secs }),
+    body: JSON.stringify({ chat_id, message_id: msg.message_id, url, user_id: msg.from?.id, status_id, phrases: list }),
   });
 }
 
