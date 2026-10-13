@@ -168,13 +168,14 @@ function tg(env, method, body) {
 const LOADING_PHRASES = {
   tiktok: ["листаю тикток вместо работы", "ныряю в тикток щас вернусь", "тикток грузится я не железный"],
   instagram: ["ныряю в рилсы щас вернусь", "достаю рилс из инсты пинцетом", "листаю рилсы ради тебя"],
+  reddit: ["лезу на реддит за видосом", "достаю видос с реддита", "реддит капризничает щас"],
   youtube: ["смотрю шортс ради тебя", "качаю ютуб только не рекламу", "уговариваю ютуб отдать видос"],
   other: ["уговариваю сервер отдать видос", "ффмпег пыхтит терпи", "грею контейнер", "пересобираю пиксели", "видос тяжёлый я не железный"],
 };
 
 function videoSite(url) {
   const s = (String(url).match(/https?:\/\/(?:[\w-]+\.)*?([\w-]+)\.[a-z]+(?:\/|$)/i)?.[1] ?? "other").toLowerCase();
-  return s === "youtu" ? "youtube" : s;
+  return s === "youtu" ? "youtube" : s === "redd" ? "reddit" : s;
 }
 
 // Медиана полного времени успешных загрузок с этого сайта, округлённая до 5 сек. null, если данных мало.
@@ -367,7 +368,7 @@ const HELP = [
   "<code>@najdibot запрос</code> — то же в любом чате через inline (с «найди» — мир)",
   "",
   "<b>Видео</b>",
-  "Кинь ссылку YouTube / Shorts / TikTok / Instagram Reels — пришлю видео (до 50 МБ)",
+  "Кинь ссылку YouTube / Shorts / TikTok / Instagram Reels / Reddit — пришлю видео (до 50 МБ)",
   "",
   "<b>Музыка</b>",
   "<code>сыграйбля название трека</code> или ссылка — пришлю mp3 (до 15 минут)",
@@ -518,7 +519,7 @@ const DOEB_RULES = [
 const PLAY = /^сыграйбля[\s,:;!.-]+(.{2,})$/is;
 const DJ = /^диджейбля[\s,:;!.-]+(.{2,})$/is;
 const DJ_STOP = /^диджейбля[\s,:;!.-]*(?:стоп|стой|хватит|выключи|отбой|харе)/i;
-const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
+const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|v\.redd\.it|reddit\.com\/r\/[\w-]+\/(?:s|comments)(?=\/)|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
 
 export default {
   // Cron (wrangler.toml): раз в 12 часов шлём сводку в каждую группу, где за это время было хотя бы 8 сообщений.
