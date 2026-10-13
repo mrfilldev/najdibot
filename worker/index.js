@@ -165,13 +165,58 @@ function tg(env, method, body) {
 }
 
 // Статус «гружу» на время загрузки видео: сразу статичная фраза, потом (если успеет) живая от модели. Удаляет сообщение контейнер.
-const LOADING_PHRASES = {
-  tiktok: ["листаю тикток вместо работы", "ныряю в тикток щас вернусь", "тикток грузится я не железный"],
-  instagram: ["ныряю в рилсы щас вернусь", "достаю рилс из инсты пинцетом", "листаю рилсы ради тебя"],
-  reddit: ["лезу на реддит за видосом", "достаю видос с реддита", "реддит капризничает щас"],
-  youtube: ["смотрю шортс ради тебя", "качаю ютуб только не рекламу", "уговариваю ютуб отдать видос"],
-  other: ["уговариваю сервер отдать видос", "ффмпег пыхтит терпи", "грею контейнер", "пересобираю пиксели", "видос тяжёлый я не железный"],
-};
+const LOADING_PHRASES = [
+  "листаю тикток вместо работы",
+  "ныряю в рилсы щас вернусь",
+  "достаю видос пинцетом",
+  "уговариваю сервер отдать видос",
+  "ффмпег пыхтит терпи",
+  "грею контейнер",
+  "пересобираю пиксели",
+  "видос тяжёлый я не железный",
+  "считаю пиксели по одному",
+  "стучусь в интернет открывай",
+  "качаю пока ты скучаешь",
+  "договариваюсь с алгоритмом",
+  "кормлю ффмпег печеньками",
+  "ищу видос в недрах сети",
+  "толкаю байты по проводу",
+  "будим хомяка в сервере",
+  "перематываю плёнку вручную",
+  "дую на картридж",
+  "прогреваю тостер для кодека",
+  "считаю кадры овец вместо сна",
+  "вытаскиваю ролик клещами",
+  "пока качается можно выдохнуть",
+  "делаю вид что очень занят",
+  "пинаю сервер для скорости",
+  "смазываю шестерёнки кодека",
+  "слушаю как гудит ффмпег",
+  "собираю видос из атомов",
+  "мой хомяк бежит быстрее",
+  "пакую кадры в чемодан",
+  "ловлю видос сачком",
+  "скармливаю ролик сжиматору",
+  "почти донёс держись",
+  "ролик упирается но я сильнее",
+  "несу видос в зубах",
+  "таскаю биты туда-сюда",
+  "взбиваю пиксели до пены",
+  "варю видос на медленном огне",
+  "видос в пути не отвлекай",
+  "тяну ролик за уши",
+  "сервер вздыхает но качает",
+  "нашёл видос теперь упаковываю",
+  "трясу интернет пока не выпадет",
+  "завариваю чай пока качается",
+  "докручиваю последние гайки",
+  "прошу видос не сопротивляться",
+  "тут главное не дышать на кодек",
+  "разгоняю хомяка до скорости света",
+  "подкручиваю битрейт отвёрткой",
+  "жму кнопку ещё быстрее",
+  "чуть-чуть осталось честно",
+];
 
 function videoSite(url) {
   const s = (String(url).match(/https?:\/\/(?:[\w-]+\.)*?([\w-]+)\.[a-z]+(?:\/|$)/i)?.[1] ?? "other").toLowerCase();
@@ -188,67 +233,23 @@ async function typicalSeconds(env, site) {
   return Math.max(5, Math.round(ms[Math.floor(ms.length / 2)] / 5000) * 5);
 }
 
-async function llmLoading(env, site, mood) {
-  if (!env.OPENROUTER_API_KEY) return null;
-  try {
-    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
-      signal: AbortSignal.timeout(2500),
-      body: JSON.stringify({
-        model: env.LLM_MODEL,
-        max_tokens: 40,
-        messages: [
-          {
-            role: "system",
-            content: STYLE + "\n\nТы качаешь видео по ссылке из чата и пишешь статус, пока оно грузится, как остроумный экран загрузки в приложении. " +
-              "Одна короткая фраза, до 7 слов, маленькими буквами, без запятых, без точки в конце, без кавычек и без времени. Можно ссылаться на платформу. " + (mood || ""),
-          },
-          { role: "user", content: `платформа: ${site}` },
-        ],
-      }),
-    });
-    const out = (await r.json()).choices?.[0]?.message?.content?.trim().replace(/^["«]|["».]$/g, "");
-    return out && out.length <= 80 ? out : null;
-  } catch {
-    return null;
-  }
-}
-
 async function startDownload(env, msg, url) {
   const chat_id = msg.chat.id;
   const site = videoSite(url);
-  const list = LOADING_PHRASES[site] ?? LOADING_PHRASES.other;
-  const pick = (skip) => {
-    const rest = list.filter((p) => p !== skip);
-    return rest[Math.floor(Math.random() * rest.length)];
-  };
+  const list = LOADING_PHRASES;
   let status_id = null;
-  let suffix = "";
   let secs = null;
   try {
     secs = await typicalSeconds(env, site).catch(() => null);
-    suffix = secs ? ` · ~${secs} сек` : "";
-    let current = pick();
-    const sent = await (await tg(env, "sendMessage", {
-      chat_id, text: current + suffix,
-    })).json();
+    const phrase = list[Math.floor(Math.random() * list.length)] + (secs ? ` · ~${secs} сек` : "");
+    const sent = await (await tg(env, "sendMessage", { chat_id, text: `▱▱▱▱▱▱▱▱▱▱ 0%\n${phrase}` })).json();
     status_id = sent.result?.message_id ?? null;
-    if (status_id) {
-      const setLine = async (line) => {
-        if (!line || line === current) return;
-        current = line;
-        const r = await tg(env, "editMessageText", { chat_id, message_id: status_id, text: line + suffix });
-        if (!r.ok) console.error("status edit failed:", await r.text());
-      };
-      moodPrompt(env, chat_id).catch(() => "").then((mood) => llmLoading(env, site, mood)).then(setLine).catch(() => {});
-    }
   } catch (e) {
     console.error("loading status failed:", e.message);
   }
   await dl(env, "/download", {
     method: "POST",
-    body: JSON.stringify({ chat_id, message_id: msg.message_id, url, user_id: msg.from?.id, status_id, expected_s: secs }),
+    body: JSON.stringify({ chat_id, message_id: msg.message_id, url, user_id: msg.from?.id, status_id, phrases: list, expected_s: secs }),
   });
 }
 
