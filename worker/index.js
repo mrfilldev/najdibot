@@ -224,41 +224,31 @@ async function startDownload(env, msg, url) {
     return rest[Math.floor(Math.random() * rest.length)];
   };
   let status_id = null;
-  let timer = null;
+  let suffix = "";
   try {
     const secs = await typicalSeconds(env, site).catch(() => null);
-    const suffix = secs ? ` · ~${secs} сек` : "";
+    suffix = secs ? ` · ~${secs} сек` : "";
     let current = pick();
     const sent = await (await tg(env, "sendMessage", {
-      chat_id, reply_parameters: { message_id: msg.message_id }, text: current + suffix,
+      chat_id, text: current + suffix,
     })).json();
     status_id = sent.result?.message_id ?? null;
     if (status_id) {
       const setLine = async (line) => {
         if (!line || line === current) return;
         current = line;
-        await tg(env, "editMessageText", { chat_id, message_id: status_id, text: line + suffix });
+        const r = await tg(env, "editMessageText", { chat_id, message_id: status_id, text: line + suffix });
+        if (!r.ok) console.error("status edit failed:", await r.text());
       };
       moodPrompt(env, chat_id).catch(() => "").then((mood) => llmLoading(env, site, mood)).then(setLine).catch(() => {});
-      // Каждые 5 сек меняем фразу, пока контейнер качает (удаляет сообщение сам).
-      timer = setInterval(() => {
-        moodPrompt(env, chat_id).catch(() => "")
-          .then((mood) => llmLoading(env, site, mood))
-          .then((line) => setLine(line ?? pick(current)))
-          .catch(() => {});
-      }, 5_000);
     }
   } catch (e) {
     console.error("loading status failed:", e.message);
   }
-  try {
-    await dl(env, "/download", {
-      method: "POST",
-      body: JSON.stringify({ chat_id, message_id: msg.message_id, url, user_id: msg.from?.id, status_id }),
-    });
-  } finally {
-    clearInterval(timer);
-  }
+  await dl(env, "/download", {
+    method: "POST",
+    body: JSON.stringify({ chat_id, message_id: msg.message_id, url, user_id: msg.from?.id, status_id, phrases: list, suffix }),
+  });
 }
 
 async function reply(env, msg, text) {

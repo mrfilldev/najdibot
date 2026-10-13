@@ -151,8 +151,15 @@ async function reportDownload(rec) {
   }
 }
 
-async function download({ chat_id, message_id, url, user_id, status_id }) {
+async function download({ chat_id, message_id, url, user_id, status_id, phrases = [], suffix = "" }) {
   const reply_parameters = { message_id };
+  // Пока качаем, раз в 5 сек меняем фразу в статусе (без повтора подряд)
+  let current = null;
+  const spin = status_id && phrases.length > 1 ? setInterval(() => {
+    const rest = phrases.filter((p) => p !== current);
+    current = rest[Math.floor(Math.random() * rest.length)];
+    tg("editMessageText", { chat_id, message_id: status_id, text: current + suffix }).catch(() => {});
+  }, 5000) : null;
   const dir = await mkdtemp(path.join(tmpdir(), "dl-"));
   const rec = { chat_id, user_id, url, ok: 0 };
   try {
@@ -202,6 +209,7 @@ async function download({ chat_id, message_id, url, user_id, status_id }) {
       text: NO_VIDEO_RE.test(e.message) ? `В этом посте нет видео, а фото достать не вышло. ${OWNER}` : failText(e),
     });
   } finally {
+    clearInterval(spin);
     if (status_id) await tg("deleteMessage", { chat_id, message_id: status_id }).catch(() => {});
     await rm(dir, { recursive: true, force: true });
     await reportDownload(rec);
