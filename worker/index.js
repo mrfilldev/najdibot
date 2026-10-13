@@ -218,27 +218,47 @@ async function llmLoading(env, site, mood) {
 async function startDownload(env, msg, url) {
   const chat_id = msg.chat.id;
   const site = videoSite(url);
+  const list = LOADING_PHRASES[site] ?? LOADING_PHRASES.other;
+  const pick = (skip) => {
+    const rest = list.filter((p) => p !== skip);
+    return rest[Math.floor(Math.random() * rest.length)];
+  };
   let status_id = null;
+  let timer = null;
   try {
-    const list = LOADING_PHRASES[site] ?? LOADING_PHRASES.other;
     const secs = await typicalSeconds(env, site).catch(() => null);
     const suffix = secs ? ` · ~${secs} сек` : "";
+    let current = pick();
     const sent = await (await tg(env, "sendMessage", {
-      chat_id, reply_parameters: { message_id: msg.message_id }, text: list[Math.floor(Math.random() * list.length)] + suffix,
+      chat_id, reply_parameters: { message_id: msg.message_id }, text: current + suffix,
     })).json();
     status_id = sent.result?.message_id ?? null;
     if (status_id) {
-      moodPrompt(env, chat_id).catch(() => "").then((mood) => llmLoading(env, site, mood)).then((line) =>
-        line && tg(env, "editMessageText", { chat_id, message_id: status_id, text: line + suffix }),
-      ).catch(() => {});
+      const setLine = async (line) => {
+        if (!line || line === current) return;
+        current = line;
+        await tg(env, "editMessageText", { chat_id, message_id: status_id, text: line + suffix });
+      };
+      moodPrompt(env, chat_id).catch(() => "").then((mood) => llmLoading(env, site, mood)).then(setLine).catch(() => {});
+      // Каждые 20 сек меняем фразу, пока контейнер качает (удаляет сообщение сам).
+      timer = setInterval(() => {
+        moodPrompt(env, chat_id).catch(() => "")
+          .then((mood) => llmLoading(env, site, mood))
+          .then((line) => setLine(line ?? pick(current)))
+          .catch(() => {});
+      }, 20_000);
     }
   } catch (e) {
     console.error("loading status failed:", e.message);
   }
-  await dl(env, "/download", {
-    method: "POST",
-    body: JSON.stringify({ chat_id, message_id: msg.message_id, url, user_id: msg.from?.id, status_id }),
-  });
+  try {
+    await dl(env, "/download", {
+      method: "POST",
+      body: JSON.stringify({ chat_id, message_id: msg.message_id, url, user_id: msg.from?.id, status_id }),
+    });
+  } finally {
+    clearInterval(timer);
+  }
 }
 
 async function reply(env, msg, text) {
