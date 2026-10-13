@@ -53,9 +53,22 @@ const run = (cmd, args, okCodes = [0]) =>
 // Короткая причина для пользователя: строка «ERROR: …» из вывода yt-dlp.
 // Кого звать при любой ошибке
 const OWNER = "@Fill_Dev";
+// Известные причины отказа yt-dlp -> понятный текст. Остальное показываем как есть (через reason).
+const KNOWN_FAILS = [
+  [/isn't available to everyone|can't be seen by certain audiences|private|login required|log in|age-restricted|confirm your age|sign in to confirm/i, "это видео недоступно без входа в аккаунт (закрытый, возрастной или ограниченный пост)"],
+  [/video unavailable|has been removed|no longer available|does not exist|404|not found|deleted/i, "видео удалено или недоступно"],
+  [/not available in your country|geo|blocked it in your country/i, "видео заблокировано в регионе бота"],
+  [/live event|is live|premiere/i, "это прямой эфир или премьера, скачать пока нельзя"],
+  [/unsupported url/i, "эту ссылку я не умею скачивать"],
+];
+const failText = (e, what = "видео") => {
+  const known = KNOWN_FAILS.find(([re]) => re.test(e.message));
+  const why = known ? known[1] : reason(e);
+  return `Не смог скачать ${what}: ${why}. ${OWNER}`;
+};
 const reason = (e) => {
   const line = String(e.message).split("\n").reverse().find((l) => /ERROR/i.test(l)) ?? String(e.message).split("\n").pop();
-  return line.replace(/\[[^\]]+\]\s*/g, "").replace(/https?:\/\/\S+/g, "").slice(0, 160).trim();
+  return line.replace(/\[[^\]]+\]\s*/g, "").replace(/https?:\/\/\S+/g, "").replace(/^\s*ERROR:\s*/i, "").replace(/^[\w-]{11}:\s*/, "").slice(0, 160).trim();
 };
 
 // yt-dlp для YouTube: сначала анонимно (cookies с IP датацентра YouTube начинает отвергать, 403),
@@ -114,7 +127,6 @@ async function sendInstagramPhoto({ chat_id, message_id, url }) {
     if (!bin.ok) return false;
     const form = new FormData();
     form.set("chat_id", String(chat_id));
-    form.set("reply_to_message_id", String(message_id));
     form.set("photo", new Blob([await bin.arrayBuffer()], { type: "image/jpeg" }), "photo.jpg");
     const r = await fetch(`${API}/sendPhoto`, { method: "POST", body: form });
     return r.ok;
@@ -164,7 +176,6 @@ async function download({ chat_id, message_id, url, user_id, status_id }) {
 
     const form = new FormData();
     form.set("chat_id", String(chat_id));
-    form.set("reply_to_message_id", String(message_id));
     form.set("supports_streaming", "true");
     // Без явных размеров Telegram иногда рисует вертикальное видео сплюснутым
     const [width, height, duration] = (await out("ffprobe", [
@@ -188,7 +199,7 @@ async function download({ chat_id, message_id, url, user_id, status_id }) {
     await tg("sendMessage", {
       chat_id,
       reply_parameters,
-      text: NO_VIDEO_RE.test(e.message) ? `В этом посте нет видео, а фото достать не вышло. ${OWNER}` : `Не смог скачать: ${reason(e)} ${OWNER}`,
+      text: NO_VIDEO_RE.test(e.message) ? `В этом посте нет видео, а фото достать не вышло. ${OWNER}` : failText(e),
     });
   } finally {
     if (status_id) await tg("deleteMessage", { chat_id, message_id: status_id }).catch(() => {});
@@ -247,7 +258,7 @@ async function audio({ chat_id, message_id, query }) {
     await tg("sendMessage", {
       chat_id,
       reply_parameters: { message_id },
-      text: `Не смог скачать трек: ${reason(e)} ${OWNER}`,
+      text: failText(e, "трек"),
     });
   }
 }
@@ -297,7 +308,7 @@ async function dj({ chat_id, message_id, query }) {
       } catch (e) {
         console.error("dj track failed:", e.message);
         if (played === 0) {
-          await tg("sendMessage", { chat_id, reply_parameters: { message_id }, text: `Не смог скачать трек: ${reason(e)} ${OWNER}` });
+          await tg("sendMessage", { chat_id, reply_parameters: { message_id }, text: failText(e, "трек") });
           return;
         }
         history.push(e.dup ? `${next} (уже играл, выбери ДРУГОЙ трек другого исполнителя)` : `${next} (не вышло, не предлагай снова)`);
