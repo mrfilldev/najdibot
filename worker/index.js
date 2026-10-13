@@ -240,13 +240,13 @@ async function startDownload(env, msg, url) {
         await tg(env, "editMessageText", { chat_id, message_id: status_id, text: line + suffix });
       };
       moodPrompt(env, chat_id).catch(() => "").then((mood) => llmLoading(env, site, mood)).then(setLine).catch(() => {});
-      // Каждые 20 сек меняем фразу, пока контейнер качает (удаляет сообщение сам).
+      // Каждые 5 сек меняем фразу, пока контейнер качает (удаляет сообщение сам).
       timer = setInterval(() => {
         moodPrompt(env, chat_id).catch(() => "")
           .then((mood) => llmLoading(env, site, mood))
           .then((line) => setLine(line ?? pick(current)))
           .catch(() => {});
-      }, 20_000);
+      }, 5_000);
     }
   } catch (e) {
     console.error("loading status failed:", e.message);
