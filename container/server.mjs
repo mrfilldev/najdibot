@@ -151,14 +151,21 @@ async function reportDownload(rec) {
   }
 }
 
-async function download({ chat_id, message_id, url, user_id, status_id, phrases = [], suffix = "" }) {
+async function download({ chat_id, message_id, url, user_id, status_id, phrases = [], suffix = "", expected_s = null }) {
   const reply_parameters = { message_id };
-  // Пока качаем, раз в 5 сек меняем фразу в статусе (без повтора подряд)
+  // Пока качаем, раз в 5 сек меняем фразу и двигаем полосу прогресса (по времени, до 95%)
   let current = null;
+  const started = Date.now();
+  const expectedMs = (expected_s || 30) * 1000;
+  const bar = () => {
+    const p = Math.min(0.95, (Date.now() - started) / expectedMs);
+    const n = Math.round(p * 10);
+    return `${"▰".repeat(n)}${"▱".repeat(10 - n)} ${Math.round(p * 100)}%`;
+  };
   const spin = status_id && phrases.length > 1 ? setInterval(() => {
     const rest = phrases.filter((p) => p !== current);
     current = rest[Math.floor(Math.random() * rest.length)];
-    tg("editMessageText", { chat_id, message_id: status_id, text: current + suffix }).catch(() => {});
+    tg("editMessageText", { chat_id, message_id: status_id, text: `${current}${suffix}\n${bar()}` }).catch(() => {});
   }, 5000) : null;
   const dir = await mkdtemp(path.join(tmpdir(), "dl-"));
   const rec = { chat_id, user_id, url, ok: 0 };

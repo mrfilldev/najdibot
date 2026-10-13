@@ -225,8 +225,9 @@ async function startDownload(env, msg, url) {
   };
   let status_id = null;
   let suffix = "";
+  let secs = null;
   try {
-    const secs = await typicalSeconds(env, site).catch(() => null);
+    secs = await typicalSeconds(env, site).catch(() => null);
     suffix = secs ? ` · ~${secs} сек` : "";
     let current = pick();
     const sent = await (await tg(env, "sendMessage", {
@@ -247,7 +248,7 @@ async function startDownload(env, msg, url) {
   }
   await dl(env, "/download", {
     method: "POST",
-    body: JSON.stringify({ chat_id, message_id: msg.message_id, url, user_id: msg.from?.id, status_id, phrases: list, suffix }),
+    body: JSON.stringify({ chat_id, message_id: msg.message_id, url, user_id: msg.from?.id, status_id, phrases: list, suffix, expected_s: secs }),
   });
 }
 
