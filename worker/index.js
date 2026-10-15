@@ -391,7 +391,7 @@ const HELP = [
   "Матерный запрос — получишь шутку вместо ссылок",
   "Ответь на сообщение чужого бота — я его обматерю (нейросеть)",
   "<code>депни в казик</code> — крутану автомат 🎰: проиграл — погорюю, выиграл — оскорблю кого-нибудь из чата",
-  "<code>/сводка</code> — юмористическая сводка чата за 12 часов (и сам пришлю её в 18:00 и в полночь)",
+  "<code>/сводка</code> — юмористическая сводка чата за 12 часов",
   "<b>Для админов</b> (ответом на сообщение, бот должен быть админом): <code>/mute [мин]</code>, <code>/unmute</code>, <code>/ban</code>, <code>/unban</code>, <code>/kick</code>, <code>/del</code>, <code>/warn</code> (3 = мьют на час), <code>/unwarn</code>, <code>/warns</code>",
   "<code>Санни доебись до Кирилла</code> (или @najdibot, Саныч, Sunny; можно ответом на сообщение или «до кого-нибудь») — пристану к человеку и поболтаю с ним; <code>Санни отстань</code> — отвалю",
   "Если спросить меня по имени (<code>Санни, сколько стоит …</code>) или ответить мне на сообщение со ссылкой, я сам поищу в интернете и открою страницу",
@@ -476,7 +476,7 @@ const ABOUT = [
   "• зовёте по имени или отвечаете мне — отвечаю всегда",
   "• сам вклиниваюсь примерно на каждое 50-е сообщение, не чаще раза в минуту",
   "• иногда лаю «ГАВ» (примерно каждое 25-е сообщение)",
-  "• сводку чата шлю в 18:00 и 00:00 по Москве (и по <code>/сводка</code>)",
+  "• сводку чата шлю по <code>/сводка</code>",
   "• после разговора ещё 10 минут по смыслу понимаю, что вы говорите мне, даже без имени",
   "",
   "<b>Что умею</b>",
@@ -534,7 +534,7 @@ const DJ_STOP = /^диджейбля[\s,:;!.-]*(?:стоп|стой|хватит
 const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|v\.redd\.it|reddit\.com\/r\/[\w-]+\/(?:s|comments)(?=\/)|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
 
 export default {
-  // Cron (wrangler.toml): раз в 12 часов шлём сводку в каждую группу, где за это время было хотя бы 8 сообщений.
+  // Cron (wrangler.toml): раз в 12 часов обновляем факты о чате (автосводка отключена; /сводка работает).
   async scheduled(event, env, ctx) {
     ctx.waitUntil((async () => {
       const since = Math.floor(Date.now() / 1000) - 12 * 3600;
@@ -543,9 +543,7 @@ export default {
       for (const c of results) {
         try {
           await updateFacts(env, c.chat_id, 12).catch((e) => console.error("facts failed", c.chat_id, e.message));
-          if ((await sleepLeft(env, c.chat_id)) > 0) continue; // спит: сводку не шлём
-          const text = await digest(env, c.chat_id, 12);
-          if (text) await tg(env, "sendMessage", { chat_id: c.chat_id, text });
+          // автосводка отключена; ручная /сводка работает
         } catch (e) {
           console.error("digest failed", c.chat_id, e.message);
         }
