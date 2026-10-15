@@ -84,6 +84,18 @@ async function runYt(args, okCodes = [0], onOut = null) {
   }
 }
 
+// Ретрай при сбое загрузки: до 2 повторов (403 и прочие временные ошибки). Известные причины (удалено, закрыто, регион) не повторяем.
+async function runYtRetry(args, okCodes, onOut, retries = 2) {
+  for (let i = 0; ; i++) {
+    try {
+      return await runYt(args, okCodes, onOut);
+    } catch (e) {
+      if (i >= retries || KNOWN_FAILS.some(([re]) => re.test(e.message))) throw e;
+      console.log(`download retry ${i + 1}/${retries}:`, reason(e));
+      await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+    }
+  }
+}
 
 const out = (cmd, args) =>
   new Promise((resolve, reject) => {
@@ -183,7 +195,7 @@ async function download({ chat_id, message_id, url, user_id, status_id, phrases 
   try {
     await tg("sendChatAction", { chat_id, action: "upload_video" });
     const t0 = Date.now();
-    const ytLog = await runYt(
+    const ytLog = await runYtRetry(
       [...videoArgs({ maxMb: DL_MAX_MB, dir, url }), "--newline", "--progress-template", "download:%(progress._percent_str)s"],
       [0],
       (chunk) => {
