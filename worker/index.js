@@ -5,109 +5,18 @@ import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 import { dl, tgBase } from "./remote.js";
 
-// Inline-бот: на @najdibot <запрос> отдаёт ссылки поиска по площадкам.
+// Inline-бот: на @najdibot координаты <фраза> отдаёт место на карте.
 // Telegram шлёт сюда апдейты вебхуком, мы отвечаем вызовом answerInlineQuery.
-
-// Шаблон: часть до запроса или функция. «yd» = поиск Яндекса по сайту,
-// когда нет проверенной ссылки на внутренний поиск.
-const yd = (site) => "https://yandex.ru/search/?text=site%3A" + site + "+";
-
-const CATEGORIES = [
-  ["Маркетплейсы", [
-    ["Ozon", "https://www.ozon.ru/search/?text="],
-    ["Wildberries", "https://www.wildberries.ru/catalog/0/search.aspx?search="],
-    ["Яндекс Маркет", "https://market.yandex.ru/search?text="],
-    ["Мегамаркет", "https://megamarket.ru/catalog/?q="],
-    ["AliExpress", "https://aliexpress.ru/wholesale?SearchText="],
-    ["Авито", "https://www.avito.ru/rossiya?q="],
-  ]],
-  ["Электроника", [
-    ["DNS", "https://www.dns-shop.ru/search/?q="],
-    ["М.Видео", "https://www.mvideo.ru/product-list-page?q="],
-    ["Эльдорадо", "https://www.eldorado.ru/search/catalog.php?q="],
-    ["Ситилинк", "https://www.citilink.ru/search/?text="],
-  ]],
-  ["Одежда, красота, дети", [
-    ["Lamoda", "https://www.lamoda.ru/catalog/?q="],
-    ["Золотое Яблоко", "https://goldapple.ru/catalogsearch/result/?q="],
-    ["Спортмастер", "https://www.sportmaster.ru/catalog/?q="],
-    ["Детский мир", "https://www.detmir.ru/search/results/?searchTerm="],
-  ]],
-  ["Дом и ремонт", [
-    ["Леруа Мерлен", "https://leroymerlin.ru/search/?q="],
-    ["ВсеИнструменты", "https://www.vseinstrumenti.ru/search_main.php?what="],
-  ]],
-  ["Авто", [
-    ["Авторусь", yd("autorus.ru")],
-    ["Шинсервис", yd("shinservice.ru")],
-    ["Exist", "https://www.exist.ru/Price/?pcode="],
-    ["Autodoc", "https://www.autodoc.ru/search?q="],
-    ["Autopiter", "https://autopiter.ru/goods/"],
-    ["Emex", "https://emex.ru/products/"],
-    ["Авито Авто", "https://www.avito.ru/rossiya/avtomobili?q="],
-    ["Auto.ru", yd("auto.ru")],
-    ["Drom", yd("drom.ru")],
-  ]],
-];
-
-// «найди <запрос>» — глобальный поиск по мировым площадкам.
-const WORLD = [
-  ["Весь мир", [
-    ["Google", "https://www.google.com/search?q="],
-    ["Google Shopping", "https://www.google.com/search?tbm=shop&q="],
-    ["Google Картинки", "https://www.google.com/search?tbm=isch&q="],
-    ["Яндекс Картинки", "https://yandex.ru/images/search?text="],
-    ["Amazon", "https://www.amazon.com/s?k="],
-    ["eBay", "https://www.ebay.com/sch/i.html?_nkw="],
-    ["AliExpress", "https://www.aliexpress.com/wholesale?SearchText="],
-    ["Temu", "https://www.temu.com/search_result.html?search_key="],
-    ["Etsy", "https://www.etsy.com/search?q="],
-  ]],
-];
-
-const flat = (cats) => cats.flatMap(([cat, items]) => items.map(([n, u]) => [n, u, cat]));
-const PLATFORMS = CATEGORIES.flatMap(([cat, items]) => items.map(([n, u]) => [n, u, cat]));
 
 const esc = (s) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-// Триггер в чате: сообщение начинается со слова «найдибля», дальше запрос.
+// Триггер в чате: «найдибля координаты <фраза>». Поиск товаров убран.
 const TRIGGER = /^найдибля[\s,:;!.-]*(.{2,})$/is;
-const TRIGGER_WORLD = /^найди[\s,:;!.-]+(.{2,})$/is;
-
-// Разбор текста: «найдибля …» — РФ, «найди …» — мир. Возвращает {cats, query} или null.
 function parseTrigger(text) {
-  let m = text.match(TRIGGER);
-  if (m) return { cats: CATEGORIES, query: m[1].trim() };
-  m = text.match(TRIGGER_WORLD);
-  if (m) return { cats: WORLD, query: m[1].trim() };
-  return null;
+  const m = text.match(TRIGGER);
+  return m && COORDS.test(m[1].trim()) ? { query: m[1].trim() } : null;
 }
-
-// Запрос с матом: вместо ссылок отвечаем стёбом.
-const RUDE = /бля|хуй|хуе|пизд|ебан|ебат|еба[нл]|сука|нахуй/i;
-const JOKES = [
-  "Такого даже Алиса не найдёт. Даже на Авито.",
-  "Wildberries развёл руками, Ozon вызвал охрану, Авито ушёл в запой. Такого в природе нет.",
-  "Искал везде. Нашёл только вопросы к тебе.",
-  "По этому запросу на Маркете 0 товаров и 1 психолог.",
-  "Такое не продают. Такое получают в подарок от жизни.",
-  "DNS ответил: «У нас такого нет, и у вас тоже не должно быть».",
-  "Нашёл 0 результатов и 1 красный флаг. Красный флаг бесплатно.",
-  "Курьер уже выехал, но по дороге передумал и ушёл в монастырь.",
-  "Сходи лучше погуляй. Там такого тоже нет, но хотя бы воздух.",
-  "На Ozon за этим стоит очередь из 0 человек. И правильно.",
-  "Я бот, а не экзорцист. Такое мне искать не по должности.",
-  "Результатов: 404. Совести: 404. Вопросов к тебе: много.",
-  "Отправил запрос в Wildberries. Они заблокировали мне аккаунт из принципа.",
-  "Это не ищется, это лечится. Но я не врач, я бот со ссылками.",
-  "Алгоритмы рекомендаций после такого запроса уйдут в отпуск. Минимум на месяц.",
-  "Найти могу, но возвращать придётся самому. Причём себе.",
-  "На Авито за такое сначала спросят «ещё актуально?», потом пропадут.",
-  "Все пять площадок подали заявление на увольнение после твоего запроса.",
-  "Даже у Яндекс Маркета есть границы. Ты их нашёл.",
-  "Поиск завершён: никто не пострадал, кроме моего самоуважения.",
-];
 
 // «найдибля координаты <фраза>» — место на карте. Точка выбирается по хэшу фразы,
 // поэтому одна и та же фраза всегда ведёт в одно и то же место.
@@ -133,27 +42,6 @@ function placeFor(phrase) {
   let h = 0;
   for (const ch of phrase.toLowerCase()) h = (h * 31 + ch.codePointAt(0)) >>> 0;
   return PLACES[h % PLACES.length];
-}
-
-function linksText(query, cats = CATEGORIES) {
-  const q = encodeURIComponent(query).replace(/%20/g, "+");
-  return cats.map(([cat, items]) =>
-    `<b>${cat}:</b> ` + items.map(([name, base]) => `<a href="${esc(base + q)}">${name}</a>`).join(" · ")
-  ).join("\n");
-}
-
-function buildResults(query, cats = CATEGORIES) {
-  const q = encodeURIComponent(query).replace(/%20/g, "+");
-  return flat(cats).map(([name, base, cat], i) => ({
-    type: "article",
-    id: String(i),
-    title: name,
-    description: `${cat}: «${query}»`,
-    input_message_content: {
-      message_text: `<a href="${esc(base + q)}">${name}: ${esc(query)}</a>`,
-      parse_mode: "HTML",
-    },
-  }));
 }
 
 function tg(env, method, body) {
@@ -374,11 +262,6 @@ function shouldBark(chatId) {
 const HELP = [
   "<b>Что я умею</b>",
   "",
-  "<b>Поиск товаров (25 площадок РФ по категориям)</b>",
-  "<code>найдибля айфон 15</code> — ссылки на Ozon, WB, Маркет, DNS, Авито, авто-магазины и др.",
-  "<code>найди iphone 15</code> — глобальный поиск: Google, Amazon, eBay, AliExpress, Temu, Etsy",
-  "<code>@najdibot запрос</code> — то же в любом чате через inline (с «найди» — мир)",
-  "",
   "<b>Видео</b>",
   "Кинь ссылку YouTube / Shorts / TikTok / Instagram Reels / Reddit — пришлю видео (до 50 МБ)",
   "",
@@ -480,7 +363,6 @@ const ABOUT = [
   "• после разговора ещё 10 минут по смыслу понимаю, что вы говорите мне, даже без имени",
   "",
   "<b>Что умею</b>",
-  "• искать товары: <code>найдибля айфон 15</code> (25 магазинов РФ), <code>найди iphone</code> (мир)",
   "• скачивать видео по ссылке YouTube, TikTok, Instagram; присылать музыку: <code>сыграйбля трек</code>, диджеить: <code>диджейбля трек</code>",
   "• голосом рассказывать погоду; казино: <code>депни в казик</code>; координаты со стёбом",
   "• читать фото и ссылки, гуглить, кидать мемы и реакции, доёбываться до людей",
@@ -613,7 +495,7 @@ export default {
           title: c[1].trim(), address: `${name}. ${note}`,
         }];
       } else {
-        results = query.length < 2 ? [] : buildResults(query, t ? t.cats : CATEGORIES);
+        results = [];
       }
       // Служебное: inline_query с id "dbg" возвращает результат в HTTP-ответе (проверка без Telegram).
       if (inline.id === "dbg") return Response.json({ raw, commandLike, cmdPrefix, coords: !!c, results: results.length });
@@ -764,13 +646,7 @@ export default {
       await reply(env, msg, DOEB_RULES);
       return new Response("ok");
     }
-    // В личке любой текст — запрос РФ (или «найди …» — мир), в группах нужен триггер.
-    const t0 = text && !text.startsWith("/")
-      ? (parseTrigger(text) || (isPrivate ? { cats: CATEGORIES, query: text } : null))
-      : null;
-    // «найди …» ответом самому боту: это просьба, а не поиск ссылок, пусть отвечает серьёзный режим (он реально ищет)
-    const replyToBot0 = msg?.reply_to_message?.from?.id === Number(env.BOT_TOKEN.split(":")[0]);
-    const t = t0 && !(replyToBot0 && !isPrivate && t0.cats === WORLD) ? t0 : null;
+    const t = text && !text.startsWith("/") ? parseTrigger(text) : null;
     const wm = text && text.match(WEATHER);
     const city = wm && CITIES.find(([stem]) => wm[1].toLowerCase().startsWith(stem));
     if (city && Date.now() - (lastWeather.get(msg.chat.id) ?? 0) > 20_000) {
@@ -907,12 +783,6 @@ export default {
         latitude: lat, longitude: lng,
         title: phrase.slice(0, 100), address: `${name}. ${note}`,
       });
-    } else if (t && t.query.length >= 2) {
-      const rude = RUDE.test(t.query);
-      await reply(env, msg, rude
-        ? JOKES[Math.floor(Math.random() * JOKES.length)]
-        : `Ищу «${esc(t.query)}»:\n${linksText(t.query, t.cats)}`);
-      return new Response("ok");
     }
     // Ни один триггер не сработал: участвуем в беседе (если обратились — всегда), иначе иногда лаем.
     if (text && !isPrivate && !text.startsWith("/")) {
