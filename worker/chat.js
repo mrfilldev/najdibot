@@ -53,6 +53,11 @@ export async function forget(env, chatId, userId) {
   return r.meta?.changes ?? 0;
 }
 
+async function voiceFromDb(env, chatId, messageId) {
+  const row = await env.DB.prepare("SELECT text FROM messages WHERE chat_id=? AND message_id=? LIMIT 1").bind(chatId, messageId).first().catch(() => null);
+  return row?.text ? row.text.replace(/^\[гс\]\s*/, "") : "";
+}
+
 async function history(env, chatId) {
   const { results } = await env.DB.prepare("SELECT name, text FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT ?")
     .bind(chatId, CONTEXT)
@@ -219,22 +224,39 @@ export function parseDecision(out, forced) {
   return forced && plain && !/"action"|"feel"/.test(plain) ? { action: "text", text: plain.slice(0, 1500) } : null;
 }
 // Фото из сообщения как data-URL (ссылку Telegram с токеном модели отдавать нельзя).
+async function tgFileBytes(env, fileId) {
+  const f = await (await fetch(`${tgBase(env)}/bot${env.BOT_TOKEN}/getFile?file_id=${fileId}`)).json();
+  // Локальный Bot API отдаёт абсолютный путь на диске VPS: забираем файл через загрузчик
+  const bin = f.result.file_path.startsWith("/")
+    ? await dl(env, `/file?path=${encodeURIComponent(f.result.file_path)}`)
+    : await fetch(`${tgBase(env)}/file/bot${env.BOT_TOKEN}/${f.result.file_path}`);
+  return new Uint8Array(await bin.arrayBuffer());
+}
+const toB64 = (buf) => {
+  let s = "";
+  for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  return btoa(s);
+};
 async function photoDataUrl(env, photo) {
   try {
     const pick = [...photo].reverse().find((p) => (p.file_size ?? 0) < 1_500_000) ?? photo[0];
-    const f = await (await fetch(`${tgBase(env)}/bot${env.BOT_TOKEN}/getFile?file_id=${pick.file_id}`)).json();
-    // Локальный Bot API отдаёт абсолютный путь на диске VPS: забираем файл через загрузчик
-    const bin = f.result.file_path.startsWith("/")
-      ? await dl(env, `/file?path=${encodeURIComponent(f.result.file_path)}`)
-      : await fetch(`${tgBase(env)}/file/bot${env.BOT_TOKEN}/${f.result.file_path}`);
-    const buf = new Uint8Array(await bin.arrayBuffer());
-    let s = "";
-    for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-    return `data:image/jpeg;base64,${btoa(s)}`;
+    return `data:image/jpeg;base64,${toB64(await tgFileBytes(env, pick.file_id))}`;
   } catch (e) {
     console.error("photo failed:", e.message);
     return null;
   }
+}
+
+// Расшифровка речи: Whisper из Workers AI (binding AI). null, если речи нет или сервис недоступен.
+export async function whisper(env, bytes) {
+  if (!env.AI) return null;
+  const r = await env.AI.run("@cf/openai/whisper-large-v3-turbo", { audio: toB64(bytes), language: "ru" });
+  return String(r?.text ?? "").trim().slice(0, 3000) || null;
+}
+export async function transcribe(env, msg) {
+  const v = msg.voice || msg.video_note;
+  if (!v || (v.duration ?? 0) > 180 || (v.file_size ?? 0) > 5_000_000) return null;
+  return whisper(env, await tgFileBytes(env, v.file_id));
 }
 
 async function memeUrl(sub) {
@@ -316,7 +338,7 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
     const rep = msg.reply_to_message;
     let replied = rep && {
       name: rep.from?.first_name || rep.from?.username || "кто-то",
-      text: (rep.text || rep.caption || "").slice(0, forced ? 3500 : 500),
+      text: (rep.text || rep.caption || ((rep.voice || rep.video_note) ? await voiceFromDb(env, chatId, rep.message_id) : "")).slice(0, forced ? 3500 : 500),
       image: rep.photo ? await photoDataUrl(env, rep.photo) : null,
     };
     const rows = await history(env, chatId);

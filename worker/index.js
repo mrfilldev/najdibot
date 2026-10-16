@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { ROLE_OFF_RE, ROLE_RE, roleEnd, roleGet, roleStart, LOUD_RE, QUIET_RE, quietEnd, quietLeft, quietStart, ALIAS_RE, APOLOGY_RE, STYLE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, updateFacts, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { transcribe, whisper, ROLE_OFF_RE, ROLE_RE, roleEnd, roleGet, roleStart, LOUD_RE, QUIET_RE, quietEnd, quietLeft, quietStart, ALIAS_RE, APOLOGY_RE, STYLE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, updateFacts, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 import { dl, tgBase } from "./remote.js";
@@ -468,6 +468,9 @@ export default {
       const m = await forceReassess(env, update.dbg_reassess.chat_id);
       return Response.json({ mood: m, relations: await feelingsStatus(env, update.dbg_reassess.chat_id) });
     }
+    if (update.dbg_transcribe) {
+      return Response.json({ text: await whisper(env, Uint8Array.from(atob(update.dbg_transcribe.b64), (c) => c.charCodeAt(0))) });
+    }
     if (update.dbg_convo) {
       const d = update.dbg_convo;
       const msg = { chat: { id: d.chat_id }, from: { id: d.user_id, first_name: d.name }, text: d.text };
@@ -511,6 +514,11 @@ export default {
     }
 
     const msg = update.message;
+    // Голосовые и кружки расшифровываем (Whisper): дальше расшифровка работает как обычный текст сообщения
+    if (msg && (msg.voice || msg.video_note) && !msg.from?.is_bot && !msg.text) {
+      const tr = await transcribe(env, msg).catch((e) => (console.error("transcribe", e.message), null));
+      if (tr) { msg.text = tr; msg.__voice = true; }
+    }
     const text = (msg?.text ?? msg?.caption)?.trim(); // подпись к фото тоже считается текстом (триггеры, обращение к боту)
     const isPrivate = msg?.chat.type === "private";
     const isGroup = msg && !isPrivate && msg.chat.type !== "channel";
@@ -540,7 +548,7 @@ export default {
       return new Response("ok");
     }
     // Запоминаем текст и подписи к фото группы для контекста (команды и сообщения ботов не храним).
-    const saved = (msg?.text || msg?.caption || (msg?.photo ? "[фото]" : "")).trim();
+    const saved = (msg?.__voice ? `[гс] ${msg.text}` : msg?.text || msg?.caption || (msg?.photo ? "[фото]" : "")).trim();
     if (isGroup && saved && !saved.startsWith("/") && !msg.from?.is_bot) {
       await remember(env, msg.chat.id, msg.from.id, msg.from.first_name || msg.from.username || "аноним",
         msg.photo && (msg.caption || "").trim() ? `[фото] ${msg.caption}` : saved, msg.message_id, msg.from.username ?? null,
@@ -616,7 +624,7 @@ export default {
     }
     // Служебное: медиа в личке — отвечаем file_id, по нему файл можно скачать через Bot API (getFile).
     const media = msg?.video || msg?.audio || msg?.voice || msg?.video_note || msg?.animation || msg?.document;
-    if (isPrivate && media) {
+    if (isPrivate && media && !msg.__voice) {
       await reply(env, msg, `file_id: <code>${media.file_id}</code>\nразмер: ${media.file_size ?? "?"} байт`);
       return new Response("ok");
     }
@@ -718,7 +726,7 @@ export default {
       return new Response("ok");
     }
     // Сообщение от чужого бота (или через его inline) — посылаем.
-    const other = msg?.from?.is_bot ? msg.from : msg?.via_bot;
+    const other = msg?.from?.is_bot ? msg.from : null; // via_bot (человек кинул гс/гифку через inline) не трогаем
     if (!quiet && other && shouldRoast(msg.chat.id, other.id, { chance: 0.1 })) { // 1 к 10: чужих ботов не трогаем постоянно
       console.log("roast bot", other.username);
       const bn = other.username ?? null;

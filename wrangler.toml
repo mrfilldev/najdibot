@@ -29,5 +29,8 @@ database_id = "1ca1697d-9a02-4e72-88a4-190214746e8c"
 [triggers]
 crons = ["0 15,21 * * *"]
 
+[ai]
+binding = "AI"
+
 [observability]
 enabled = true
