@@ -261,6 +261,47 @@ function lengthRule(askText = "", unprompted = false) {
   return { rule: `ЖЁСТКОЕ ТРЕБОВАНИЕ К ДЛИНЕ (важнее всех остальных пожеланий про развёрнутость): ${T}. Не пересказывай вопрос и не оправдывайся, сразу к сути.${Math.random() < 0.85 ? " В этой реплике без обращений «бро», «братан», «братишка», «старый» и подобных: называй по имени или вовсе без обращения." : ""}` };
 }
 
+// ---- Перепалка: умные ответы на оскорбления ----
+// Запускается на прямое обращение, где собеседник ругается/оскорбляет (или у него глубокий минус) и это не просьба помочь.
+// Схема: сильная модель (ROAST_MODEL) пишет 3 варианта разными приёмами, быстрая модель выбирает самый смешной.
+export const INSULT_RE = /(?<![а-яё])(?:твоя мама|твою мать|мамк\S*|дебил\S*|идиот\S*|тупой|тупая|тупица|тупиц\S*|лох\S*|чмо|урод\S*|даун\S*|мраз\S*|твар[ьи]\S*|(?:би)?бизьян\S*|обезьян\S*|заткнись|заткни\S*|сдохни|отвали|отстань|железяк\S*|ржавый|соси\S*|шлюх\S*|дурак\S*|дура|кретин\S*|ничтожест\S*)/i;
+const ROAST_SYSTEM = `РЕЖИМ ПЕРЕПАЛКИ: собеседник тебя оскорбляет, отвечаешь так чтобы чат заржал. Твоя цель: острота, а не громкость.
+ПРИЁМ: возьми конкретную деталь из его фразы (слово, ошибку, тон, то как он старается) или факт из досье и его прошлых сообщений, и разверни против него через неожиданное сравнение, абсурдную метафору или логический разворот.
+ЧЕГО НЕЛЬЗЯ: зеркалить («сам ты», «ты ещё хуже», «твоя мама тоже») и пересказывать его оскорбление; делать смыслом реплики «иди нахуй», «ты ебанутый», «долбоёб», «заебал»: мат только усилитель, одно-два слова, вся соль в остроте; повторять конструкции и приёмы из твоих прошлых реплик в логе; шутить про национальность, пол, веру, здоровье, ориентацию, маму как оружие тоже не надо.
+ФОРМА: 1-2 коротких предложения до 200 символов, манера письма из правил выше (без запятых, с маленькой буквы, без точки в конце).
+ПРИМЕРЫ уровня остроты (не копируй дословно, выдумывай своё под ситуацию):
+«ты тупой бот» → тупой бот зато меня хотя бы обновляют а тебя после версии 1.0 так и оставили с багами
+«иди нахуй» → схожу как только ты найдёшь у себя мозг а то навигатор пишет маршрут не построен
+«да ты бибизьяна» → обезьяна хотя бы ловко лазает а ты даже в разговор залезть нормально не смог
+«заебал» → это у тебя в личной жизни всё заебало а у меня просто работа слушать как ты стараешься
+«ты ничего не понимаешь» → я прочитал весь интернет а ты инструкцию к чайнику и то с третьего раза
+«бот сдохни» → меня бэкапят а тебя даже на второй год в школе не оставили чтобы не повторять`;
+
+export function parseVariants(out) {
+  const m = String(out || "").match(/\{[\s\S]*\}/);
+  if (!m) return [];
+  try {
+    const v = JSON.parse(m[0]).variants;
+    return Array.isArray(v) ? v.map((x) => String(x).trim()).filter((x) => x.length > 2) : [];
+  } catch { return []; }
+}
+
+// Манера чата: без запятых, маленькая буква, без точки в конце.
+export const roastTidy = (t) => t.replace(/[«»"]/g, "").replace(/,/g, "").replace(/\s+/g, " ").replace(/[.!]+$/, "").trim().replace(/^./, (c) => c.toLowerCase()).slice(0, 300);
+
+export async function roastReply(env, { rows, asker, replied, mood, about }) {
+  const quotes = rows.filter((r) => r.name === asker.name).slice(-5).map((r) => `«${r.text.slice(0, 120)}»`).join("; ");
+  const log = rows.slice(-8).map((r) => `${r.name}: ${r.text.slice(0, 200)}`).join("\n");
+  const sys = `${STYLE}\n\n${ROAST_SYSTEM}${mood ? `\n\n${mood}` : ""}${about ? `\n${about}` : ""}`;
+  const user = `Лог чата:\n${log}\n\n${asker.name} пишет тебе: «${asker.text}»${replied ? `\nОн ответил на сообщение (${replied.name}): «${replied.text.slice(0, 300)}»` : ""}${quotes ? `\nЕго недавние реплики (можно подколоть за них): ${quotes}` : ""}\n\nНапиши 3 разных ответа разными приёмами (сравнение; разворот его слов; подколка фактом о нём). Ответь ТОЛЬКО JSON: {"variants":["…","…","…"]}`;
+  const variants = parseVariants(await ask(env, sys, user, 2000, null, 1.0, env.ROAST_MODEL, 25_000));
+  if (!variants.length) return null;
+  if (variants.length === 1) return roastTidy(variants[0]);
+  const judge = await ask(env, "Ты судья юмора в дружеском русскоязычном чате. Выбери самый смешной и остроумный ответ: конкретный, неожиданный, бьёт по сказанному, не банальный и не зеркалящий. Ответь одной цифрой.", `Ему написали: «${asker.text}»\n\n${variants.map((v, i) => `${i + 1}. ${v}`).join("\n")}`, 400, null, 0).catch(() => null);
+  const i = Number(String(judge || "").match(/[1-9]/)?.[0]) - 1;
+  return roastTidy(variants[i] ?? variants[0]);
+}
+
 // Возвращает true, если что-то сделал (написал, поставил реакцию, прислал мем).
 export async function maybeChat(env, msg, tg, { forced = false } = {}) {
   if (!env.DB || !env.OPENROUTER_API_KEY) return false;
@@ -296,7 +337,14 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
     }
     const asker = forced ? { name: msg.from?.first_name || msg.from?.username || "собеседник", text: (msg.text || msg.caption || "").slice(0, 700) } : null;
     const feel = forced ? await loadFeeling(env, chatId, msg.from.id).catch(() => null) : null;
-    let d = await decide(env, rows, forced, replied, extra, asker, mood + (about ? `\n${about}` : "") + (roleText ? `\n${roleText}` : "")).catch((e) => (console.error("decide", e.message), null));
+    let d = null;
+    // перепалка: оскорбляет или глубокий минус, и это не просьба помочь: умный ответ вместо обычного
+    const roastMode = forced && asker && asker.text && !(HELP_RE.test(asker.text) && !SELF_RE.test(asker.text)) && !(feel && feel.score > 0) && (MAT_RE.test(asker.text) || INSULT_RE.test(asker.text) || (feel && feel.score <= -3));
+    if (roastMode) {
+      const line = await roastReply(env, { rows, asker, replied, mood, about }).catch((e) => (console.error("roast", e.message), null));
+      if (line) d = { action: "text", text: line, feel: { delta: 0, note: "" } };
+    }
+    if (!d) d = await decide(env, rows, forced, replied, extra, asker, mood + (about ? `\n${about}` : "") + (roleText ? `\n${roleText}` : "")).catch((e) => (console.error("decide", e.message), null));
     // На прямое обращение молчать нельзя: один повтор, потом запасная фраза.
     if (forced && d?.action !== "text") d = await decide(env, rows, forced, replied, extra, asker, mood).catch(() => null);
     // человеку с плюсом мат недопустим: одна попытка переписать, иначе маскируем матерные слова
@@ -442,13 +490,13 @@ function matchName(arg, people) {
   }) ?? null;
 }
 
-async function ask(env, system, user, maxTokens = 220, image = null, temperature = 1.0) {
+async function ask(env, system, user, maxTokens = 220, image = null, temperature = 1.0, model = null, timeout = 20_000) {
   try {
     const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
-      signal: AbortSignal.timeout(20_000),
-      body: JSON.stringify({ model: env.LLM_MODEL, max_tokens: maxTokens, temperature, messages: [{ role: "system", content: system }, { role: "user", content: image ? [{ type: "text", text: user }, { type: "image_url", image_url: { url: image } }] : user }] }),
+      signal: AbortSignal.timeout(timeout),
+      body: JSON.stringify({ model: model || env.LLM_MODEL, max_tokens: maxTokens, temperature, messages: [{ role: "system", content: system }, { role: "user", content: image ? [{ type: "text", text: user }, { type: "image_url", image_url: { url: image } }] : user }] }),
     });
     return (await r.json()).choices?.[0]?.message?.content?.trim() || null;
   } catch (e) {

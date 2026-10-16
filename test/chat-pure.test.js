@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ALIAS_RE, APOLOGY_RE, LOUD_RE, QUIET_RE, SLEEP_RE, WAKE_RE, parseDecision, reels, sleepHours } from "../worker/chat.js";
+import { ALIAS_RE, APOLOGY_RE, INSULT_RE, LOUD_RE, QUIET_RE, SLEEP_RE, WAKE_RE, parseDecision, parseVariants, reels, roastTidy, sleepHours } from "../worker/chat.js";
 
 describe("обращение к боту", () => {
   it.each(["Санни, привет", "эй найдибот", "Sunny help", "саныч ты тут?"])("узнаёт %s", (t) => expect(ALIAS_RE.test(t)).toBe(true));
@@ -51,5 +51,15 @@ describe("reels", () => {
     for (let v = 1; v <= 64; v++) expect(reels(v)).toHaveLength(3);
     for (const v of [1, 22, 43, 64]) expect(new Set(reels(v)).size).toBe(1);
     expect(new Set(reels(2)).size).toBeGreaterThan(1);
+  });
+});
+
+describe("перепалка", () => {
+  it.each(["да ты бибизьяна", "шлюха ты", "твоя мама гей", "заткнись бот"])("видит оскорбление: %s", (t) => expect(INSULT_RE.test(t)).toBe(true));
+  it.each(["как дела", "расскажи про погоду"])("не видит: %s", (t) => expect(INSULT_RE.test(t)).toBe(false));
+  it("разбор вариантов и причёсывание", () => {
+    expect(parseVariants('```json\n{"variants":["раз, два","три"]}\n```')).toEqual(["раз, два", "три"]);
+    expect(parseVariants("мусор")).toEqual([]);
+    expect(roastTidy("Ну ты, «даёшь».")).toBe("ну ты даёшь");
   });
 });
