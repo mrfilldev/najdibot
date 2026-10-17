@@ -646,6 +646,22 @@ export default {
         return new Response("ok");
       }
     }
+    // «явдисе»: тегает всех, кого бот видел в чате (Bot API не отдаёт список участников, берём авторов из журнала).
+    if (isGroup && text && /^\/?(?:я[\s_-]*в[\s_-]*дисе)(@\w+)?[\s!.]*$/i.test(text.trim())) {
+      const { results } = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id>0 GROUP BY user_id ORDER BY MAX(id) DESC LIMIT 200")
+        .bind(msg.chat.id).all().catch(() => ({ results: [] }));
+      const people = results.filter((u) => u.user_id !== msg.from?.id);
+      if (!people.length) {
+        await reply(env, msg, "Я тут пока никого не видел.");
+        return new Response("ok");
+      }
+      const tags = people.map((u) => `<a href="tg://user?id=${u.user_id}">${esc(u.name || "участник")}</a>`);
+      for (let i = 0; i < tags.length; i += 30) {
+        const chunk = tags.slice(i, i + 30).join(" ");
+        await reply(env, msg, i === 0 ? `📣 Явдисе! ${chunk}` : chunk);
+      }
+      return new Response("ok");
+    }
     if (text && /^\/(about|о_себе|абаут)(@\w+)?(?![\w-])/i.test(text)) {
       await reply(env, msg, ABOUT);
       return new Response("ok");
