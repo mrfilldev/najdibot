@@ -355,7 +355,8 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
     if (forced) {
       const known = await factsPrompt(env, chatId, [msg.from?.first_name, ...rows.map((r) => r.name)]).catch(() => "");
       const ment = await mentionedPeople(env, chatId, [msg.text || msg.caption || "", rep?.text || rep?.caption || ""], msg.from?.id).catch(() => "");
-      about = [known, ment].filter(Boolean).join("\n");
+      const nicks = await nickPrompt(env, chatId).catch(() => "");
+      about = [known, ment, nicks].filter(Boolean).join("\n");
     }
     const asker = forced ? { name: msg.from?.first_name || msg.from?.username || "собеседник", text: (msg.text || msg.caption || "").slice(0, 700) } : null;
     const feel = forced ? await loadFeeling(env, chatId, msg.from.id).catch(() => null) : null;
@@ -982,6 +983,20 @@ export async function factsPrompt(env, chatId, names) {
   const lines = results.filter((r) => set.has(r.name) && r.facts).map((r) => `${r.name}: ${r.facts.split("\n").join("; ")}`);
   if (!lines.length) return "";
   return `Что ты помнишь о людях (долгая память; упоминай к месту и естественно, не перечисляй списком, не выдумывай сверх этого):\n${lines.join("\n")}`;
+}
+
+// ---- Клички: «Саня, @вася теперь звать Бубен» ----
+export const NICK_RE = new RegExp(`${BOT_NAMES}[\\s,:]+([^\\n]{1,60}?)\\s+теперь\\s+(?:зовут|звать|зови|называй|называть|будет|будешь)\\s+(?:как\\s+)?[«"]?([^\\n«»"]{2,30}?)[»"]?[\\s.!]*$`, "i");
+
+export async function nickSet(env, chatId, userId, nick) {
+  await env.DB.prepare("INSERT OR REPLACE INTO nicknames (chat_id, user_id, nick) VALUES (?,?,?)").bind(chatId, userId, nick).run();
+}
+
+export async function nickPrompt(env, chatId) {
+  const { results } = await env.DB.prepare("SELECT m.name, n.nick FROM nicknames n JOIN (SELECT user_id, name FROM messages WHERE chat_id=? GROUP BY user_id) m ON m.user_id=n.user_id WHERE n.chat_id=?")
+    .bind(chatId, chatId).all().catch(() => ({ results: [] }));
+  if (!results.length) return "";
+  return `Клички (в чате решили, что этих людей зовут так; обращайся к ним по кличке, а не по имени): ${results.map((r) => `${r.name} = «${r.nick}»`).join("; ")}.`;
 }
 
 // ---- Роль: «Санни, прикинься Вархаммером» на пару часов, «выйди из роли» снимает ----

@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { transcribe, whisper, ROLE_OFF_RE, ROLE_RE, roleEnd, roleGet, roleStart, LOUD_RE, QUIET_RE, quietEnd, quietLeft, quietStart, ALIAS_RE, APOLOGY_RE, STYLE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, updateFacts, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { transcribe, whisper, NICK_RE, nickSet, ROLE_OFF_RE, ROLE_RE, roleEnd, roleGet, roleStart, LOUD_RE, QUIET_RE, quietEnd, quietLeft, quietStart, ALIAS_RE, APOLOGY_RE, STYLE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, updateFacts, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 import { dl, tgBase } from "./remote.js";
@@ -613,6 +613,27 @@ export default {
         const role = rm[1].replace(/[.!?…]+$/, "").trim();
         await roleStart(env, msg.chat.id, role);
         await reply(env, msg, esc(`Принято, ближайшие 2 часа я «${role}». Выйти из роли: «Санни, выйди из роли».`));
+        return new Response("ok");
+      }
+    }
+    // Кличка: «Саня, @вася теперь звать Бубен» (цель: ответ на сообщение, text_mention или @username из журнала).
+    if (isGroup && text) {
+      const nm = text.match(NICK_RE);
+      if (nm) {
+        const rep = msg.reply_to_message?.from;
+        const tm = (msg.entities ?? []).find((e) => e.type === "text_mention" && e.user && !e.user.is_bot);
+        const un = nm[1].match(/@([A-Za-z0-9_]{4,})/);
+        let uid = null;
+        if (tm) uid = tm.user.id;
+        else if (un) uid = (await env.DB.prepare("SELECT user_id FROM messages WHERE chat_id=? AND lower(username)=lower(?) ORDER BY id DESC LIMIT 1").bind(msg.chat.id, un[1]).first().catch(() => null))?.user_id ?? null;
+        else if (rep && !rep.is_bot) uid = rep.id;
+        if (uid) {
+          const nick = nm[2].trim();
+          await nickSet(env, msg.chat.id, uid, nick);
+          await reply(env, msg, esc(`Принято, теперь он «${nick}».`));
+        } else {
+          await reply(env, msg, "Не понял, кого. Тегни человека (@ник) или ответь на его сообщение.");
+        }
         return new Response("ok");
       }
     }
