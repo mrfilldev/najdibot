@@ -441,6 +441,8 @@ async function tagAll(env, chatId, excludeId, head, send) {
 // «Саня, позови всех в дискорд [в 18:00]»: время по Москве (UTC+3, без перехода).
 const DISCORD_RE = /(?:^|[\s,.!])(?:саня|санни|саныч|найдибот|sunny)[\s,:;!.-]+(?:позови|созови|кинь\s+клич)\s+всех\s+(?:в|на)\s+дискорд(?:\s+(?:в|к|на)\s+(\d{1,2})(?:[:.\s](\d{2}))?(?:\s*(?:по\s+мск|мск|по\s+москве))?)?[\s!.]*$/i;
 const MSK = 3 * 3600;
+// Таблицу создаём на лету: у wrangler может не быть прав на D1 для миграций.
+const ensureCalls = (env) => env.DB.prepare("CREATE TABLE IF NOT EXISTS discord_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, at INTEGER NOT NULL, by_name TEXT NOT NULL DEFAULT '')").run();
 function nextMsk(h, m, now = Math.floor(Date.now() / 1000)) {
   const day = 86400;
   let t = Math.floor((now + MSK) / day) * day + h * 3600 + m * 60 - MSK;
@@ -455,6 +457,7 @@ export default {
       // отложенные «позови всех в дискорд»
       ctx.waitUntil((async () => {
         const now = Math.floor(Date.now() / 1000);
+        await ensureCalls(env);
         const { results } = await env.DB.prepare("SELECT id, chat_id, by_name FROM discord_calls WHERE at<=?").bind(now).all();
         for (const c of results) {
           await env.DB.prepare("DELETE FROM discord_calls WHERE id=?").bind(c.id).run();
@@ -736,6 +739,7 @@ export default {
         return new Response("ok");
       }
       const at = nextMsk(h, mi);
+      await ensureCalls(env);
       await env.DB.prepare("INSERT INTO discord_calls (chat_id, at, by_name) VALUES (?,?,?)").bind(msg.chat.id, at, msg.from?.first_name ?? "").run();
       await reply(env, msg, `Ок, в ${String(h).padStart(2, "0")}:${String(mi).padStart(2, "0")} по МСК позову всех в дискорд.`);
       return new Response("ok");
