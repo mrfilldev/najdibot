@@ -421,9 +421,46 @@ const DJ = /^диджейбля[\s,:;!.-]+(.{2,})$/is;
 const DJ_STOP = /^диджейбля[\s,:;!.-]*(?:стоп|стой|хватит|выключи|отбой|харе)/i;
 const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|v\.redd\.it|reddit\.com\/r\/[\w-]+\/(?:s|comments)(?=\/)|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
 
+// Теги всех, кого бот видел в чате (Bot API не отдаёт список участников, берём авторов из журнала).
+async function tagAll(env, chatId, excludeId, head, send) {
+  const { results } = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id>0 GROUP BY user_id ORDER BY MAX(id) DESC LIMIT 200")
+    .bind(chatId).all().catch(() => ({ results: [] }));
+  const people = results.filter((u) => u.user_id !== excludeId);
+  if (!people.length) return false;
+  const tags = people.map((u) => `<a href="tg://user?id=${u.user_id}">${esc(u.name || "участник")}</a>`);
+  for (let i = 0; i < tags.length; i += 30) {
+    const chunk = tags.slice(i, i + 30).join(" ");
+    await send(i === 0 ? `${head} ${chunk}` : chunk);
+  }
+  return true;
+}
+
+// «Саня, позови всех в дискорд [в 18:00]»: время по Москве (UTC+3, без перехода).
+const DISCORD_RE = /(?:^|[\s,.!])(?:саня|санни|саныч|найдибот|sunny)[\s,:;!.-]+(?:позови|созови|кинь\s+клич)\s+всех\s+(?:в|на)\s+дискорд(?:\s+(?:в|к|на)\s+(\d{1,2})(?:[:.\s](\d{2}))?(?:\s*(?:по\s+мск|мск|по\s+москве))?)?[\s!.]*$/i;
+const MSK = 3 * 3600;
+function nextMsk(h, m, now = Math.floor(Date.now() / 1000)) {
+  const day = 86400;
+  let t = Math.floor((now + MSK) / day) * day + h * 3600 + m * 60 - MSK;
+  if (t <= now) t += day;
+  return t;
+}
+
 export default {
   // Cron (wrangler.toml): раз в 12 часов обновляем факты о чате (автосводка отключена; /сводка работает).
   async scheduled(event, env, ctx) {
+    if (event.cron === "*/5 * * * *") {
+      // отложенные «позови всех в дискорд»
+      ctx.waitUntil((async () => {
+        const now = Math.floor(Date.now() / 1000);
+        const { results } = await env.DB.prepare("SELECT id, chat_id, by_name FROM discord_calls WHERE at<=?").bind(now).all();
+        for (const c of results) {
+          await env.DB.prepare("DELETE FROM discord_calls WHERE id=?").bind(c.id).run();
+          await tagAll(env, c.chat_id, 0, "🎮 Все в дискорд!", (text) =>
+            tg(env, "sendMessage", { chat_id: c.chat_id, text, parse_mode: "HTML" })).catch((e) => console.error("discord call", e.message));
+        }
+      })());
+      return;
+    }
     ctx.waitUntil((async () => {
       const since = Math.floor(Date.now() / 1000) - 12 * 3600;
       const { results } = await env.DB.prepare("SELECT chat_id, COUNT(*) n FROM messages WHERE ts>? AND chat_id<0 AND user_id!=0 GROUP BY chat_id HAVING n>=8")
@@ -679,18 +716,25 @@ export default {
     }
     // «явдисе»: тегает всех, кого бот видел в чате (Bot API не отдаёт список участников, берём авторов из журнала).
     if (isGroup && text && /^\/?(?:я[\s_-]*в[\s_-]*дисе)(@\w+)?[\s!.]*$/i.test(text.trim())) {
-      const { results } = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id>0 GROUP BY user_id ORDER BY MAX(id) DESC LIMIT 200")
-        .bind(msg.chat.id).all().catch(() => ({ results: [] }));
-      const people = results.filter((u) => u.user_id !== msg.from?.id);
-      if (!people.length) {
-        await reply(env, msg, "Я тут пока никого не видел.");
+      const ok = await tagAll(env, msg.chat.id, msg.from?.id, "📣 Явдисе!", (t) => reply(env, msg, t));
+      if (!ok) await reply(env, msg, "Я тут пока никого не видел.");
+      return new Response("ok");
+    }
+    // «Саня, позови всех в дискорд [в 18:00]»: сразу или в назначенное время (мск).
+    const dm = isGroup && text && text.match(DISCORD_RE);
+    if (dm) {
+      if (dm[1] === undefined) {
+        await tagAll(env, msg.chat.id, 0, "🎮 Все в дискорд!", (t) => reply(env, msg, t));
         return new Response("ok");
       }
-      const tags = people.map((u) => `<a href="tg://user?id=${u.user_id}">${esc(u.name || "участник")}</a>`);
-      for (let i = 0; i < tags.length; i += 30) {
-        const chunk = tags.slice(i, i + 30).join(" ");
-        await reply(env, msg, i === 0 ? `📣 Явдисе! ${chunk}` : chunk);
+      const h = +dm[1], mi = dm[2] === undefined ? 0 : +dm[2];
+      if (h > 23 || mi > 59) {
+        await reply(env, msg, "Время какое-то кривое.");
+        return new Response("ok");
       }
+      const at = nextMsk(h, mi);
+      await env.DB.prepare("INSERT INTO discord_calls (chat_id, at, by_name) VALUES (?,?,?)").bind(msg.chat.id, at, msg.from?.first_name ?? "").run();
+      await reply(env, msg, `Ок, в ${String(h).padStart(2, "0")}:${String(mi).padStart(2, "0")} по МСК позову всех в дискорд.`);
       return new Response("ok");
     }
     if (text && /^\/(about|о_себе|абаут)(@\w+)?(?![\w-])/i.test(text)) {

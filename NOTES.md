@@ -1,6 +1,6 @@
 # najdibot: handoff (2026-10-10, конец сессии)
 
-**Состояние.** @najdibot работает на Cloudflare: Worker (`worker/index.js`, `chat.js`, `mod.js`) + Container с yt-dlp/ffmpeg (`container/`) + D1 (таблицы `messages`, `warns`, `pokes`, `convos`, `moods`, `feelings`, `sleeps`, `quiets`; схемы в `db/*.sql`). Деплой: `DOCKER_CONTEXT=desktop-linux npx wrangler deploy`. После деплоя живой контейнер остаётся на старом коде: `POST /restart` с `X-Telegram-Bot-Api-Secret-Token` (= WEBHOOK_SECRET); `POST /debug {"query"}` даёт реальную ошибку загрузки. Список навыков: `README.md`, `/help`.
+**Состояние.** @najdibot работает на Cloudflare: Worker (`worker/index.js`, `chat.js`, `mod.js`) + Container с yt-dlp/ffmpeg (`container/`) + D1 (таблицы `messages`, `warns`, `pokes`, `convos`, `moods`, `feelings`, `sleeps`, `quiets`, `discord_calls`; схемы в `db/*.sql`). Деплой: `DOCKER_CONTEXT=desktop-linux npx wrangler deploy`. После деплоя живой контейнер остаётся на старом коде: `POST /restart` с `X-Telegram-Bot-Api-Secret-Token` (= WEBHOOK_SECRET); `POST /debug {"query"}` даёт реальную ошибку загрузки. Список навыков: `README.md`, `/help`.
 
 **Решения и грабли.**
 - yt-dlp: сначала анонимно, потом с cookies (`runYt`), обязателен `--js-runtimes node`. С cookies с IP Cloudflare YouTube даёт 403. Ролики 18+ пока не скачиваются.
@@ -49,3 +49,4 @@
 - Контейнер (`download` в `container/server.mjs`) раз в 5 сек правит сообщение: полоса сверху (реальный прогресс: yt-dlp 0-15%, ffmpeg 15-85%, отправка 85-100%, шкала монотонная), фраза снизу. Удаляет сообщение в `finally`.
 - Контейнер отвечает на `/download` сразу (202) и качает в фоне, поэтому таймеры в Worker не работают.
 - Открыто: если ролик уже H.264, полоса прыгает с ~15% на 85%; прогресс отправки в Telegram не считается.
+- «Саня, позови всех в дискорд [в 18:00]» (`DISCORD_RE`, `tagAll`, `nextMsk` в `index.js`, таблица `discord_calls`): без времени тегает сразу, со временем (МСК) пишет в таблицу, cron `*/5 * * * *` в `scheduled` рассылает теги. Нужна миграция `db/discord_calls.sql`.
