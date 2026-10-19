@@ -259,6 +259,12 @@ function shouldBark(chatId) {
   return true;
 }
 
+const WELCOME = [
+  "Здарова, я Санни 😎 Качаю видео по ссылкам, ищу музыку (<code>сыграйбля трек</code>), болтаю и стебу чат.",
+  "Позови: @najdibot или «Санни, …».",
+  "Полный список команд — /help, о себе — /about.",
+].join("\n");
+
 const HELP = [
   "<b>Что я умею</b>",
   "",
@@ -618,7 +624,11 @@ export default {
       await reply(env, msg, esc(await moodStatus(env, msg.chat.id)));
       return new Response("ok");
     }
-    if (text && /^\/(start|help)(@\w+)?\b/i.test(text)) {
+    if (text && /^\/start(@\w+)?\b/i.test(text)) {
+      await reply(env, msg, WELCOME);
+      return new Response("ok");
+    }
+    if (text && /^\/help(@\w+)?\b/i.test(text)) {
       await reply(env, msg, HELP);
       return new Response("ok");
     }
