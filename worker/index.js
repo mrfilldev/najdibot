@@ -439,7 +439,7 @@ async function tagAll(env, chatId, excludeId, head, send) {
 }
 
 // «Саня, позови всех в дискорд [в 18:00]»: время по Москве (UTC+3, без перехода).
-const DISCORD_RE = /(?:^|[\s,.!])(?:саня|санни|саныч|найдибот|sunny)[\s,:;!.-]+(?:позови|созови|кинь\s+клич)\s+всех\s+(?:в|на)\s+дискорд(?:\s+(?:в|к|на)\s+(\d{1,2})(?:[:.\s](\d{2}))?(?:\s*(?:по\s+мск|мск|по\s+москве))?)?[\s!.]*$/i;
+const DISCORD_RE = /(?:^|[\s,.!])(?:саня|сань|санёк|санек|санька|санни|саныч|найдибот|sunny)[\s,:;!.-]+(?:(?:(?:по|со)зови|зови|собери|кинь\s+клич)\s+(?:всех|народ|пацанов|братву)|(?:общий\s+)?сбор(?:\s+всех)?)\s+(?:в|на)\s+дис\p{L}*(?:\s+(?:в|к|на)\s+(\d{1,2})(?:[:.\s](\d{2}))?(?:\s*(?:по\s+мск|мск|по\s+москве))?)?[\s!.]*$/iu;
 const MSK = 3 * 3600;
 // Таблицу создаём на лету: у wrangler может не быть прав на D1 для миграций.
 const ensureCalls = (env) => env.DB.prepare("CREATE TABLE IF NOT EXISTS discord_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, at INTEGER NOT NULL, by_name TEXT NOT NULL DEFAULT '')").run();
