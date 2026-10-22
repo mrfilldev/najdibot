@@ -1,5 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
+import { getSettings, featureOn, showSettings, settingsCallback, optedOut, setOptout, resolveNames } from "./settings.js";
 import { transcribe, whisper, NICK_RE, nickSet, ROLE_OFF_RE, ROLE_RE, roleEnd, roleGet, roleStart, LOUD_RE, QUIET_RE, quietEnd, quietLeft, quietStart, ALIAS_RE, APOLOGY_RE, STYLE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, updateFacts, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
@@ -268,6 +269,8 @@ const WELCOME = [
 const HELP = [
   "<b>Что я умею</b>",
   "",
+  "<code>/settings</code> — включить или выключить мои функции в этом чате",
+  "",
   "<b>Видео</b>",
   "Кинь ссылку YouTube / Shorts / TikTok / Instagram Reels / Reddit — пришлю видео (до 50 МБ)",
   "",
@@ -425,10 +428,12 @@ const DJ_STOP = /^диджейбля[\s,:;!.-]*(?:стоп|стой|хватит
 const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|v\.redd\.it|reddit\.com\/r\/[\w-]+\/(?:s|comments)(?=\/)|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
 
 // Теги всех, кого бот видел в чате (Bot API не отдаёт список участников, берём авторов из журнала).
-async function tagAll(env, chatId, excludeId, head, send) {
+async function tagAll(env, chatId, excludeId, head, send, except = []) {
+  const skip = await optedOut(env, chatId);
+  for (const id of except) skip.add(id);
   const { results } = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id>0 GROUP BY user_id ORDER BY MAX(id) DESC LIMIT 200")
     .bind(chatId).all().catch(() => ({ results: [] }));
-  const people = results.filter((u) => u.user_id !== excludeId);
+  const people = results.filter((u) => u.user_id !== excludeId && !skip.has(u.user_id));
   if (!people.length) return false;
   const tags = people.map((u) => `<a href="tg://user?id=${u.user_id}">${esc(u.name || "участник")}</a>`);
   for (let i = 0; i < tags.length; i += 30) {
@@ -439,10 +444,14 @@ async function tagAll(env, chatId, excludeId, head, send) {
 }
 
 // «Саня, позови всех в дискорд [в 18:00]»: время по Москве (UTC+3, без перехода).
-const DISCORD_RE = /(?:^|[\s,.!])(?:саня|сань|санёк|санек|санька|санни|саныч|найдибот|sunny)[\s,:;!.-]+(?:(?:(?:по|со)зови|зови|собери|кинь\s+клич)\s+(?:всех|народ|пацанов|братву)|(?:общий\s+)?сбор(?:\s+всех)?)\s+(?:в|на)\s+дис\p{L}*(?:\s+(?:в|к|на)\s+(\d{1,2})(?:[:.\s](\d{2}))?(?:\s*(?:по\s+мск|мск|по\s+москве))?)?[\s!.]*$/iu;
+const DISCORD_RE = /(?:^|[\s,.!])(?:саня|сань|санёк|санек|санька|санни|саныч|найдибот|sunny)[\s,:;!.-]+(?:(?:(?:по|со)зови|зови|собери|кинь\s+клич)\s+(?:всех|народ|пацанов|братву)|(?:общий\s+)?сбор(?:\s+всех)?)\s+(?:в|на)\s+дис\p{L}*(?:\s+(?:в|к|на)\s+(\d{1,2})(?:[:.\s](\d{2}))?(?:\s*(?:по\s+мск|мск|по\s+москве))?)?(?:[\s,]+(?:кроме|без)\s+(.+?))?[\s!.]*$/iu;
 const MSK = 3 * 3600;
 // Таблицу создаём на лету: у wrangler может не быть прав на D1 для миграций.
-const ensureCalls = (env) => env.DB.prepare("CREATE TABLE IF NOT EXISTS discord_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, at INTEGER NOT NULL, by_name TEXT NOT NULL DEFAULT '')").run();
+const ensureCalls = async (env) => {
+  await ensureCallsTable(env);
+  await env.DB.prepare("ALTER TABLE discord_calls ADD COLUMN skip_ids TEXT NOT NULL DEFAULT '[]'").run().catch(() => {}); // уже есть
+};
+const ensureCallsTable = (env) => env.DB.prepare("CREATE TABLE IF NOT EXISTS discord_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, at INTEGER NOT NULL, by_name TEXT NOT NULL DEFAULT '')").run();
 function nextMsk(h, m, now = Math.floor(Date.now() / 1000)) {
   const day = 86400;
   let t = Math.floor((now + MSK) / day) * day + h * 3600 + m * 60 - MSK;
@@ -458,11 +467,11 @@ export default {
       ctx.waitUntil((async () => {
         const now = Math.floor(Date.now() / 1000);
         await ensureCalls(env);
-        const { results } = await env.DB.prepare("SELECT id, chat_id, by_name FROM discord_calls WHERE at<=?").bind(now).all();
+        const { results } = await env.DB.prepare("SELECT id, chat_id, by_name, skip_ids FROM discord_calls WHERE at<=?").bind(now).all();
         for (const c of results) {
           await env.DB.prepare("DELETE FROM discord_calls WHERE id=?").bind(c.id).run();
           await tagAll(env, c.chat_id, 0, "🎮 Все в дискорд!", (text) =>
-            tg(env, "sendMessage", { chat_id: c.chat_id, text, parse_mode: "HTML" })).catch((e) => console.error("discord call", e.message));
+            tg(env, "sendMessage", { chat_id: c.chat_id, text, parse_mode: "HTML" }), JSON.parse(c.skip_ids || "[]")).catch((e) => console.error("discord call", e.message));
         }
       })());
       return;
@@ -562,6 +571,10 @@ export default {
       });
     }
 
+    if (update.callback_query?.data?.startsWith("st:")) {
+      await settingsCallback(env, (m, b) => tg(env, m, b), update.callback_query).catch((e) => console.error("settings", e.message));
+      return new Response("ok");
+    }
     const msg = update.message;
     // Голосовые и кружки расшифровываем (Whisper): дальше расшифровка работает как обычный текст сообщения
     if (msg && (msg.voice || msg.video_note) && !msg.from?.is_bot && !msg.text) {
@@ -571,6 +584,9 @@ export default {
     const text = (msg?.text ?? msg?.caption)?.trim(); // подпись к фото тоже считается текстом (триггеры, обращение к боту)
     const isPrivate = msg?.chat.type === "private";
     const isGroup = msg && !isPrivate && msg.chat.type !== "channel";
+    // Настройки функций группы (/settings): выключенные триггеры молчат.
+    const S = isGroup ? await getSettings(env, msg.chat.id) : null;
+    const on = (k) => !S || featureOn(S, k);
     if (isGroup && text && /^\/forget(@\w+)?\b/i.test(text)) {
       const n = await forget(env, msg.chat.id, msg.from.id);
       await reply(env, msg, `Забыл всё, что ты писал(а) здесь: ${n} сообщ.`);
@@ -588,7 +604,7 @@ export default {
       return new Response("ok");
     }
     // Модерация (только админы, по реплаю): /mute [мин], /unmute, /ban, /unban, /kick, /del, /warn, /unwarn, /warns
-    const mc = isGroup && text && text.match(MOD_CMD);
+    const mc = isGroup && on("mod") && text && text.match(MOD_CMD);
     if (mc) {
       await moderate({
         env, tg: (m, b) => tg(env, m, b), reply: (t) => reply(env, msg, t), msg,
@@ -644,7 +660,7 @@ export default {
       }
     }
     // Роль: «Санни, прикинься Вархаммером» на 2 часа; «Санни, выйди из роли» или /role_off снимает.
-    if (isGroup && text) {
+    if (isGroup && on("persona") && text) {
       if (ROLE_OFF_RE.test(text)) {
         const had = await roleGet(env, msg.chat.id);
         await roleEnd(env, msg.chat.id);
@@ -660,7 +676,7 @@ export default {
       }
     }
     // Кличка: «Саня, @вася теперь звать Бубен» (цель: ответ на сообщение, text_mention или @username из журнала).
-    if (isGroup && text) {
+    if (isGroup && on("persona") && text) {
       const nm = text.match(NICK_RE);
       if (nm) {
         const rep = msg.reply_to_message?.from;
@@ -684,6 +700,11 @@ export default {
       await reply(env, msg, esc(await feelingsStatus(env, msg.chat.id)));
       return new Response("ok");
     }
+    // В личке бот только качает: ссылки на видео, «сыграйбля», «диджейбля»; остальное (болтовня, казино, погода…) — только в группах.
+    if (isPrivate && text && !/^\/(start|help)(@\w+)?\b/i.test(text) && !PLAY.test(text) && !DJ.test(text) && !DJ_STOP.test(text) && !VIDEO_URL.test(text)) {
+      await reply(env, msg, "В личке я только качаю: кинь ссылку на YouTube, TikTok, Instagram или Reddit, либо напиши <code>сыграйбля трек</code>. Поболтать — в группе.");
+      return new Response("ok");
+    }
     if (text && /^\/(mood|настроение)(@\w+)?(?![\w-])/i.test(text)) {
       await reply(env, msg, esc(await moodStatus(env, msg.chat.id)));
       return new Response("ok");
@@ -696,6 +717,10 @@ export default {
       await reply(env, msg, HELP);
       return new Response("ok");
     }
+    if (isGroup && text && /^\/(settings|настройки)(@\w+)?\b/i.test(text)) {
+      await showSettings(env, (m, b) => tg(env, m, b), msg);
+      return new Response("ok");
+    }
     // Служебное: медиа в личке — отвечаем file_id, по нему файл можно скачать через Bot API (getFile).
     const media = msg?.video || msg?.audio || msg?.voice || msg?.video_note || msg?.animation || msg?.document;
     if (isPrivate && media && !msg.__voice) {
@@ -703,7 +728,7 @@ export default {
       return new Response("ok");
     }
     // «@najdibot доебись до Кирилла» / ответом на сообщение / «до кого-нибудь»: бот цепляет человека и ведёт с ним диалог.
-    if (isGroup && text) {
+    if (isGroup && on("poke") && text) {
       const pm = text.match(POKE_RE);
       if (pm) {
         await poke(env, (m, b) => tg(env, m, b), msg, pm[1]).catch((e) => console.error("poke", e.message));
@@ -721,16 +746,25 @@ export default {
       }
     }
     // «явдисе»: тегает всех, кого бот видел в чате (Bot API не отдаёт список участников, берём авторов из журнала).
-    if (isGroup && text && /^\/?(?:я[\s_-]*в[\s_-]*дисе)(@\w+)?[\s!.]*$/i.test(text.trim())) {
+    if (isGroup && on("discord") && text && /^\/?(?:я[\s_-]*в[\s_-]*дисе)(@\w+)?[\s!.]*$/i.test(text.trim())) {
       const ok = await tagAll(env, msg.chat.id, msg.from?.id, "📣 Явдисе!", (t) => reply(env, msg, t));
       if (!ok) await reply(env, msg, "Я тут пока никого не видел.");
       return new Response("ok");
     }
+    // Самоотписка от созыва: /неписать (не тегать меня), /пиши (вернуть).
+    if (isGroup && text && /^\/(неписать|nocall|пиши|call)(@\w+)?\b/i.test(text)) {
+      const out = /^\/(неписать|nocall)/i.test(text);
+      await setOptout(env, msg.chat.id, msg.from.id, out);
+      await reply(env, msg, out ? "Ок, в созывах тебя не тегаю. Вернуться: /пиши" : "Ок, снова зову тебя в созывах.");
+      return new Response("ok");
+    }
     // «Саня, позови всех в дискорд [в 18:00]»: сразу или в назначенное время (мск).
-    const dm = isGroup && text && text.match(DISCORD_RE);
+    const dm = isGroup && on("discord") && text && text.match(DISCORD_RE);
     if (dm) {
+      const { ids: except, missing } = dm[3] ? await resolveNames(env, msg.chat.id, dm[3]) : { ids: [], missing: [] };
+      if (missing.length) await reply(env, msg, `Не нашёл в чате: ${esc(missing.join(", "))}. Их позову.`);
       if (dm[1] === undefined) {
-        await tagAll(env, msg.chat.id, 0, "🎮 Все в дискорд!", (t) => reply(env, msg, t));
+        await tagAll(env, msg.chat.id, 0, "🎮 Все в дискорд!", (t) => reply(env, msg, t), except);
         return new Response("ok");
       }
       const h = +dm[1], mi = dm[2] === undefined ? 0 : +dm[2];
@@ -740,7 +774,7 @@ export default {
       }
       const at = nextMsk(h, mi);
       await ensureCalls(env);
-      await env.DB.prepare("INSERT INTO discord_calls (chat_id, at, by_name) VALUES (?,?,?)").bind(msg.chat.id, at, msg.from?.first_name ?? "").run();
+      await env.DB.prepare("INSERT INTO discord_calls (chat_id, at, by_name, skip_ids) VALUES (?,?,?,?)").bind(msg.chat.id, at, msg.from?.first_name ?? "", JSON.stringify(except)).run();
       await reply(env, msg, `Ок, в ${String(h).padStart(2, "0")}:${String(mi).padStart(2, "0")} по МСК позову всех в дискорд.`);
       return new Response("ok");
     }
@@ -753,7 +787,7 @@ export default {
       return new Response("ok");
     }
     const t = text && !text.startsWith("/") ? parseTrigger(text) : null;
-    const wm = text && text.match(WEATHER);
+    const wm = on("weather") && text && text.match(WEATHER);
     const city = wm && CITIES.find(([stem]) => wm[1].toLowerCase().startsWith(stem));
     if (city && Date.now() - (lastWeather.get(msg.chat.id) ?? 0) > 20_000) {
       lastWeather.set(msg.chat.id, Date.now());
@@ -765,7 +799,7 @@ export default {
       );
       return new Response("ok");
     }
-    if (text && CASINO.test(text) && Date.now() - (lastCasino.get(msg.chat.id) ?? 0) > 4000) {
+    if (on("casino") && text && CASINO.test(text) && Date.now() - (lastCasino.get(msg.chat.id) ?? 0) > 4000) {
       lastCasino.set(msg.chat.id, Date.now());
       ctx.waitUntil((async () => {
         const r = await (await tg(env, "sendDice", {
@@ -815,17 +849,17 @@ export default {
       })());
       return new Response("ok");
     }
-    if (text && SYMPHONY.test(text)) {
+    if (on("fun") && text && SYMPHONY.test(text)) {
       await sendVoice(env, msg, INSULT_OGG_B64, INSULT_DURATION, "symphony.ogg");
       return new Response("ok");
     }
-    if (text && GAV_CALL.test(text)) {
+    if (on("fun") && text && GAV_CALL.test(text)) {
       await sendGav(env, msg);
       return new Response("ok");
     }
     // Сообщение от чужого бота (или через его inline) — посылаем.
     const other = msg?.from?.is_bot ? msg.from : null; // via_bot (человек кинул гс/гифку через inline) не трогаем
-    if (!quiet && other && shouldRoast(msg.chat.id, other.id, { chance: 0.1 })) { // 1 к 10: чужих ботов не трогаем постоянно
+    if (on("roast") && !quiet && other && shouldRoast(msg.chat.id, other.id, { chance: 0.1 })) { // 1 к 10: чужих ботов не трогаем постоянно
       console.log("roast bot", other.username);
       const bn = other.username ?? null;
       await setMood(env, msg.chat.id, "ревнивый", 4, "люди пользуются чужим ботом");
@@ -837,7 +871,7 @@ export default {
     // Человек ответил чужому боту: бот-автор виден в reply_to_message, ругаемся прямо под его сообщением.
     const target = msg?.reply_to_message;
     const ownId = Number(env.BOT_TOKEN.split(":")[0]);
-    if (!quiet && target?.from?.is_bot && target.from.id !== ownId && shouldRoast(msg.chat.id, target.from.id, { cooldown: 5_000, chance: 1 })) {
+    if (on("roast") && !quiet && target?.from?.is_bot && target.from.id !== ownId && shouldRoast(msg.chat.id, target.from.id, { cooldown: 5_000, chance: 1 })) {
       const mood0 = await moodPrompt(env, msg.chat.id);
       await setMood(env, msg.chat.id, "ревнивый", 4, "люди отвечают чужому боту");
       await tg(env, "sendMessage", {
@@ -848,7 +882,7 @@ export default {
       return new Response("ok");
     }
     // «сыграйбля <название или ссылка>» — присылаем трек аудиофайлом.
-    const play = text && text.match(PLAY);
+    const play = on("music") && text && text.match(PLAY);
     if (play) {
       ctx.waitUntil(
         dl(env, "/audio", {
@@ -859,11 +893,11 @@ export default {
       return new Response("ok");
     }
     // «диджейбля <трек>» — стартовый трек, дальше бот сам подбирает следующие (до 10); «диджейбля стоп» — выключить.
-    if (text && DJ_STOP.test(text)) {
+    if (on("music") && text && DJ_STOP.test(text)) {
       ctx.waitUntil(dl(env, "/dj-stop", { method: "POST", body: JSON.stringify({ chat_id: msg.chat.id }) }));
       return new Response("ok");
     }
-    const dj = text && text.match(DJ);
+    const dj = on("music") && text && text.match(DJ);
     if (dj) {
       ctx.waitUntil(
         dl(env, "/dj", {
@@ -874,7 +908,7 @@ export default {
       return new Response("ok");
     }
     // Ссылка на YouTube/TikTok в любом сообщении — скачиваем видео.
-    const link = text && text.match(VIDEO_URL);
+    const link = on("video") && text && text.match(VIDEO_URL);
     if (link) {
       ctx.waitUntil(startDownload(env, msg, link[0]));
       return new Response("ok");
@@ -891,7 +925,7 @@ export default {
       });
     }
     // Ни один триггер не сработал: участвуем в беседе (если обратились — всегда), иначе иногда лаем.
-    if (text && !isPrivate && !text.startsWith("/")) {
+    if (on("chat") && text && !isPrivate && !text.startsWith("/")) {
       const ownUsername = ALIAS_RE.test(text); // @najdibot, найдибот, Санни, Sunny, Саныч…
       const rt = msg.reply_to_message;
       // Ответ на видео, которое прислал сам бот (скачанный ролик): к нему не цепляемся, если не позвали по имени.

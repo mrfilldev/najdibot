@@ -6,5 +6,5 @@ set -a; . ./.env; set +a
 curl -s "${TG_API:-https://api.telegram.org}/bot$BOT_TOKEN/setWebhook" \
   --data-urlencode "url=$1" \
   --data-urlencode "secret_token=$WEBHOOK_SECRET" \
-  --data-urlencode 'allowed_updates=["inline_query","message"]'
+  --data-urlencode 'allowed_updates=["inline_query","message","callback_query"]'
 echo
