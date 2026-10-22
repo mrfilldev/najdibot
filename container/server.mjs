@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { NO_VIDEO_RE, instagramEmbedUrl, parseEmbedImage, videoArgs } from "./ytargs.mjs";
+import { PAGE_ONLY_RE, MUSIC_LOOKUP_RE, driveDirect, fileKind, isDirectMedia, musicQueryFromHtml, parseFx, parsePage, twitterId, yandexDiskApi } from "./media.mjs";
 import { writeFileSync } from "node:fs";
 
 const TOKEN = process.env.BOT_TOKEN;
@@ -155,6 +156,117 @@ async function sendInstagramPhoto({ chat_id, message_id, url }) {
   }
 }
 
+const YT_HOSTS_RE = /^https?:\/\/(?:[\w-]+\.)*(?:youtube\.com|youtu\.be|tiktok\.com|instagram\.com|redd\.it|reddit\.com)\//i;
+const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+// Страница как текст с учётом кодировки (заголовок Content-Type или <meta charset>): старые сайты отдают windows-1251
+const getHtml = async (url) => {
+  const r = await fetch(url, { headers: { "user-agent": UA, "accept-language": "ru,en;q=0.8" }, redirect: "follow", signal: AbortSignal.timeout(20_000) });
+  const buf = Buffer.from(await r.arrayBuffer());
+  const head = buf.subarray(0, 4096).toString("latin1");
+  const cs = (r.headers.get("content-type") || "").match(/charset=([\w-]+)/i)?.[1] || head.match(/<meta[^>]+charset=["']?([\w-]+)/i)?.[1] || "utf-8";
+  try {
+    return new TextDecoder(cs).decode(buf);
+  } catch {
+    return buf.toString("utf8");
+  }
+};
+
+// Файл по ссылке в память (с реферером сайта: иначе CDN часть картинок не отдаёт). null, если не вышло или больше лимита.
+async function fetchBin(url, referer) {
+  try {
+    const r = await fetch(url, { headers: { "user-agent": UA, ...(referer ? { referer } : {}) }, redirect: "follow", signal: AbortSignal.timeout(60_000) });
+    if (!r.ok) return null;
+    const len = Number(r.headers.get("content-length")) || 0;
+    if (len > MAX_MB * 1024 * 1024) return null;
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > MAX_MB * 1024 * 1024 || !buf.length) return null;
+    return { buf, type: (r.headers.get("content-type") || "").split(";")[0] };
+  } catch (e) {
+    console.error("fetchBin failed:", url.slice(0, 80), e.message);
+    return null;
+  }
+}
+
+// Один файл в чат: тип по расширению/Content-Type. Фото больше 10 МБ уходят документом.
+async function sendFile({ chat_id, message_id, url, referer }) {
+  const f = await fetchBin(url, referer);
+  if (!f) return false;
+  let kind = fileKind(url);
+  if (kind === "document") kind = f.type.startsWith("video/") ? "video" : f.type.startsWith("image/") ? (f.type === "image/gif" ? "animation" : "photo") : /^audio\/(?:mpeg|mp4|x-m4a)$/.test(f.type) ? "audio" : "document";
+  if (kind === "photo" && f.buf.length > 10 * 1024 * 1024) kind = "document";
+  const method = { video: "sendVideo", animation: "sendAnimation", photo: "sendPhoto", audio: "sendAudio", document: "sendDocument" }[kind];
+  const form = new FormData();
+  form.set("chat_id", String(chat_id));
+  form.set("reply_parameters", JSON.stringify({ message_id }));
+  if (kind === "video") form.set("supports_streaming", "true");
+  form.set(kind, new Blob([f.buf], { type: f.type || "application/octet-stream" }), decodeURIComponent(new URL(url).pathname.split("/").pop() || "file") || "file");
+  const r = await fetch(`${API}/${method}`, { method: "POST", body: form });
+  if (!r.ok) console.error(`${method} failed:`, r.status, (await r.text()).slice(0, 150));
+  return r.ok;
+}
+
+// Фото и видео страницы. Есть видео — шлём его (обложку не дублируем); иначе фото альбомом (до 10).
+// Телеграм отвергает фото с кривыми размерами: тогда те же файлы уходят документами. true, если хоть что-то отправили.
+async function sendMedia({ chat_id, message_id, images, videos, referer, caption }) {
+  for (const v of videos.filter((u) => !/\.m3u8/i.test(u)).slice(0, 3)) {
+    if (await sendFile({ chat_id, message_id, url: v, referer })) return true;
+  }
+  const pics = [];
+  for (const u of images.slice(0, 10)) {
+    const f = await fetchBin(u, referer);
+    if (f) pics.push(f);
+  }
+  if (!pics.length) return false;
+  const reply_parameters = JSON.stringify({ message_id });
+  const post = async (method, form) => (await fetch(`${API}/${method}`, { method: "POST", body: form })).ok;
+  const asAlbum = async (kind) => {
+    const doc = kind === "document";
+    const form = new FormData();
+    form.set("chat_id", String(chat_id));
+    form.set("reply_parameters", reply_parameters);
+    if (pics.length === 1) {
+      if (caption) form.set("caption", caption.slice(0, 1000));
+      form.set(kind, new Blob([pics[0].buf], { type: pics[0].type || "image/jpeg" }), "photo.jpg");
+      return post(doc ? "sendDocument" : "sendPhoto", form);
+    }
+    form.set("media", JSON.stringify(pics.map((_, i) => ({ type: kind, media: `attach://p${i}`, ...(i === 0 && caption ? { caption: caption.slice(0, 1000) } : {}) }))));
+    pics.forEach((f, i) => form.set(`p${i}`, new Blob([f.buf], { type: f.type || "image/jpeg" }), `p${i}.jpg`));
+    return post("sendMediaGroup", form);
+  };
+  const tooBig = pics.some((f) => f.buf.length > 10 * 1024 * 1024);
+  return (!tooBig && (await asAlbum("photo"))) || (await asAlbum("document"));
+}
+
+// Любая страница: медиа из HTML (og:-теги, для AliExpress свой разбор). X идёт через fxtwitter.
+async function sendPageMedia({ chat_id, message_id, url }) {
+  const tid = twitterId(url);
+  if (tid) {
+    try {
+      const j = await (await fetch(`https://api.fxtwitter.com/status/${tid}`, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(15_000) })).json();
+      const m = parseFx(j);
+      if ((m.images.length || m.videos.length) && (await sendMedia({ chat_id, message_id, images: m.images, videos: m.videos, referer: null, caption: m.text }))) return true;
+    } catch (e) {
+      console.error("fxtwitter failed:", e.message);
+    }
+  }
+  const html = await getHtml(url);
+  const { images, videos } = parsePage(html, url);
+  if (!images.length && !videos.length) return false;
+  return sendMedia({ chat_id, message_id, images, videos, referer: new URL(url).origin + "/" });
+}
+
+// Прямая ссылка на файл, либо публичный диск (Google Drive, Dropbox, Яндекс Диск)
+async function sendDirect({ chat_id, message_id, url }) {
+  let target = driveDirect(url) || url;
+  const api = yandexDiskApi(url);
+  if (api) {
+    const j = await (await fetch(api, { signal: AbortSignal.timeout(15_000) })).json();
+    if (!j.href) return false;
+    target = j.href;
+  }
+  return sendFile({ chat_id, message_id, url: target });
+}
+
 // Отчёт о загрузке воркеру (он пишет в D1). Не критично: при любой ошибке молча пропускаем.
 async function reportDownload(rec) {
   try {
@@ -195,14 +307,40 @@ async function download({ chat_id, message_id, url, user_id, status_id, phrases 
   try {
     await tg("sendChatAction", { chat_id, action: "upload_video" });
     const t0 = Date.now();
-    const ytLog = await runYtRetry(
-      [...videoArgs({ maxMb: DL_MAX_MB, dir, url }), "--newline", "--progress-template", "download:%(progress._percent_str)s"],
-      [0],
-      (chunk) => {
-        const m = [...chunk.matchAll(/(\d+(?:\.\d+)?)%/g)].pop();
-        if (m) setProg("dl", Number(m[1]) / 100);
-      },
-    );
+    const ctxArgs = { chat_id, message_id, url };
+    if (isDirectMedia(url) || driveDirect(url) || yandexDiskApi(url)) {
+      if (!(await sendDirect(ctxArgs))) throw new Error("ERROR: не смог скачать файл по ссылке (недоступен или больше 50 МБ)");
+      rec.ok = 1;
+      rec.dl_ms = Date.now() - t0;
+      return;
+    }
+    if (PAGE_ONLY_RE.test(url) || twitterId(url)) {
+      if (!(await sendPageMedia(ctxArgs))) throw new Error("ERROR: на странице нет фото и видео, которые можно достать (возможно, сайт закрыт от ботов)");
+      rec.ok = 1;
+      rec.dl_ms = Date.now() - t0;
+      return;
+    }
+    let ytLog;
+    try {
+      ytLog = await runYtRetry(
+        [...videoArgs({ maxMb: DL_MAX_MB, dir, url }), "--newline", "--progress-template", "download:%(progress._percent_str)s"],
+        [0],
+        (chunk) => {
+          const m = [...chunk.matchAll(/(\d+(?:\.\d+)?)%/g)].pop();
+          if (m) setProg("dl", Number(m[1]) / 100);
+        },
+      );
+    } catch (e) {
+      // yt-dlp не справился (нет видео, неизвестный сайт): пробуем фото/видео прямо со страницы
+      // Для YouTube/TikTok/Instagram/Reddit и известных причин отказа (закрыто, удалено, длинное) не пробуем: на странице будет заглушка логина или превью
+      const skip = YT_HOSTS_RE.test(url) || KNOWN_FAILS.some(([re]) => re.test(e.message)) || /длинн|duration|max-filesize|File is larger/i.test(e.message);
+      if (!skip && (await sendPageMedia(ctxArgs).catch(() => false))) {
+        rec.ok = 1;
+        rec.dl_ms = Date.now() - t0;
+        return;
+      }
+      throw e;
+    }
     setProg("dl", 1);
     const tDl = Date.now();
     rec.dl_ms = tDl - t0;
@@ -261,6 +399,12 @@ async function sendTrack({ chat_id, message_id, query, accept }) {
   try {
     await tg("sendChatAction", { chat_id, action: "upload_voice" });
     // Ссылка качается как есть, текст ищется на YouTube (первый результат).
+    if (MUSIC_LOOKUP_RE.test(query)) {
+      // Spotify/Яндекс Музыка и т.п. отдают только страницу: берём название и ищем трек на YouTube
+      const q = musicQueryFromHtml(await getHtml(query).catch(() => ""));
+      if (!q) throw new Error("ERROR: не смог понять, что за трек по этой ссылке");
+      query = q;
+    }
     const src = /^https?:\/\//i.test(query) ? query : `ytsearch5:${query}`;
     await runYt([
       "--no-playlist",

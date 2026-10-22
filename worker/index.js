@@ -1,10 +1,11 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { getSettings, featureOn, showSettings, settingsCallback, optedOut, setOptout, resolveNames } from "./settings.js";
+import { getSettings, featureOn, nickReply, showSettings, settingsCallback, optedOut, setOptout, resolveNames } from "./settings.js";
 import { transcribe, whisper, NICK_RE, nickSet, ROLE_OFF_RE, ROLE_RE, roleEnd, roleGet, roleStart, LOUD_RE, QUIET_RE, quietEnd, quietLeft, quietStart, ALIAS_RE, APOLOGY_RE, STYLE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, updateFacts, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 import { dl, tgBase } from "./remote.js";
+import { ANY_URL as VIDEO_URL, AUDIO_URL, DOWNLOAD_CMD } from "./sites.js";
 
 // Inline-бот: на @najdibot координаты <фраза> отдаёт место на карте.
 // Telegram шлёт сюда апдейты вебхуком, мы отвечаем вызовом answerInlineQuery.
@@ -272,7 +273,7 @@ const HELP = [
   "<code>/settings</code> — включить или выключить мои функции в этом чате",
   "",
   "<b>Видео</b>",
-  "Кинь ссылку YouTube / Shorts / TikTok / Instagram Reels / Reddit — пришлю видео (до 50 МБ)",
+  "Кинь ссылку YouTube / Shorts / TikTok / Instagram Reels / Reddit — пришлю видео (до 50 МБ), AliExpress — фото и видео товара",
   "",
   "<b>Созыв</b>",
   "<code>явдисе</code> — тегну всех; <code>Саня, позови всех в дискорд в 18:00</code> — позову в нужное время (МСК), без времени — сразу",
@@ -425,7 +426,6 @@ const DOEB_RULES = [
 const PLAY = /^сыграйбля[\s,:;!.-]+(.{2,})$/is;
 const DJ = /^диджейбля[\s,:;!.-]+(.{2,})$/is;
 const DJ_STOP = /^диджейбля[\s,:;!.-]*(?:стоп|стой|хватит|выключи|отбой|харе)/i;
-const VIDEO_URL = /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|tiktok\.com|v\.redd\.it|reddit\.com\/r\/[\w-]+\/(?:s|comments)(?=\/)|instagram\.com\/(?:reels?|p|tv)(?=\/))\/?\S*/i;
 
 // Теги всех, кого бот видел в чате (Bot API не отдаёт список участников, берём авторов из журнала).
 async function tagAll(env, chatId, excludeId, head, send, except = []) {
@@ -675,6 +675,10 @@ export default {
         return new Response("ok");
       }
     }
+    // Ответ на запрос кличке из /settings
+    if (isGroup && text && msg.reply_to_message?.from?.is_bot && (await nickReply(env, (m, b) => tg(env, m, b), msg).catch((e) => (console.error("nick", e.message), false)))) {
+      return new Response("ok");
+    }
     // Кличка: «Саня, @вася теперь звать Бубен» (цель: ответ на сообщение, text_mention или @username из журнала).
     if (isGroup && on("persona") && text) {
       const nm = text.match(NICK_RE);
@@ -701,8 +705,8 @@ export default {
       return new Response("ok");
     }
     // В личке бот только качает: ссылки на видео, «сыграйбля», «диджейбля»; остальное (болтовня, казино, погода…) — только в группах.
-    if (isPrivate && text && !/^\/(start|help)(@\w+)?\b/i.test(text) && !PLAY.test(text) && !DJ.test(text) && !DJ_STOP.test(text) && !VIDEO_URL.test(text)) {
-      await reply(env, msg, "В личке я только качаю: кинь ссылку на YouTube, TikTok, Instagram или Reddit, либо напиши <code>сыграйбля трек</code>. Поболтать — в группе.");
+    if (isPrivate && text && !/^\/(start|help)(@\w+)?\b/i.test(text) && !PLAY.test(text) && !DJ.test(text) && !DJ_STOP.test(text) && !VIDEO_URL.test(text) && !DOWNLOAD_CMD.test(text)) {
+      await reply(env, msg, "В личке я только качаю: кинь ссылку (YouTube, TikTok, Instagram, X, VK, Pinterest, маркетплейсы и др.) или «скачай &lt;ссылка&gt;», либо напиши <code>сыграйбля трек</code>. Поболтать — в группе.");
       return new Response("ok");
     }
     if (text && /^\/(mood|настроение)(@\w+)?(?![\w-])/i.test(text)) {
@@ -740,7 +744,7 @@ export default {
         return new Response("ok");
       }
       // Специальные триггеры (голосовые, казино, погода, музыка, ссылки на видео) важнее продолжения доёба.
-      const special = SYMPHONY.test(text) || GAV_CALL.test(text) || CASINO.test(text) || WEATHER.test(text) || PLAY.test(text) || VIDEO_URL.test(text) || MOD_CMD.test(text);
+      const special = SYMPHONY.test(text) || GAV_CALL.test(text) || CASINO.test(text) || WEATHER.test(text) || PLAY.test(text) || VIDEO_URL.test(text) || DOWNLOAD_CMD.test(text) || MOD_CMD.test(text);
       if (!quiet && !text.startsWith("/") && !special && (await pokeContinue(env, (m, b) => tg(env, m, b), msg).catch(() => false))) {
         return new Response("ok");
       }
@@ -907,8 +911,19 @@ export default {
       );
       return new Response("ok");
     }
-    // Ссылка на YouTube/TikTok в любом сообщении — скачиваем видео.
-    const link = on("video") && text && text.match(VIDEO_URL);
+    // Ссылка на музыкальный сервис — присылаем трек аудиофайлом.
+    const song = on("music") && text && text.match(AUDIO_URL);
+    if (song) {
+      ctx.waitUntil(
+        dl(env, "/audio", {
+          method: "POST",
+          body: JSON.stringify({ chat_id: msg.chat.id, message_id: msg.message_id, query: song[0] }),
+        }),
+      );
+      return new Response("ok");
+    }
+    // Ссылка на видео/картинки в любом сообщении, либо «скачай <ссылка>» для любой страницы.
+    const link = on("video") && text && (text.match(VIDEO_URL) || text.match(DOWNLOAD_CMD)?.slice(1));
     if (link) {
       ctx.waitUntil(startDownload(env, msg, link[0]));
       return new Response("ok");

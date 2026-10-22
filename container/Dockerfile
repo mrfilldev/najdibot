@@ -4,6 +4,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certi
 # Самодостаточный бинарник yt-dlp, питон не нужен
 RUN curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /usr/local/bin/yt-dlp \
     && chmod +x /usr/local/bin/yt-dlp
-COPY server.mjs ytargs.mjs /app/
+COPY server.mjs ytargs.mjs media.mjs /app/
 EXPOSE 8080
 CMD ["node", "/app/server.mjs"]

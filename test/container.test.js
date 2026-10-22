@@ -42,3 +42,16 @@ describe("Instagram-посты без видео", () => {
     expect(parseEmbedImage("<html></html>")).toBeNull();
   });
 });
+
+import { isAliExpress, parseAliMedia } from "../container/ytargs.mjs";
+describe("aliexpress", () => {
+  it("узнаёт ссылки", () => {
+    expect(isAliExpress("https://a.aliexpress.com/_EHNy1se")).toBe(true);
+    expect(isAliExpress("https://www.aliexpress.com/item/1.html")).toBe(true);
+    expect(isAliExpress("https://youtube.com/x")).toBe(false);
+  });
+  it("достаёт фото и видео", () => {
+    const html = '..."imagePathList":["https://a/1.jpg","https://a/2.jpg"],"x":"https:\\/\\/v.alicdn.com\\/p\\/a.mp4?k=1&amp;b=2"';
+    expect(parseAliMedia(html)).toEqual({ images: ["https://a/1.jpg", "https://a/2.jpg"], videos: ["https://v.alicdn.com/p/a.mp4?k=1&b=2"] });
+  });
+});

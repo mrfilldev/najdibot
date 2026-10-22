@@ -43,3 +43,17 @@ export const parseEmbedImage = (html) => {
   const m = String(html).match(/class="EmbeddedMediaImage"[^>]*?src="([^"]+)"/);
   return m ? m[1].replace(/&amp;/g, "&").replace(/&#0?38;/g, "&") : null;
 };
+
+// AliExpress: yt-dlp его не умеет. Фото и видео товара берём из JSON, который лежит прямо в HTML страницы.
+export const isAliExpress = (url) => /^https?:\/\/(?:[\w-]+\.)*aliexpress\.(?:com|ru)\/|^https?:\/\/a\.aliexpress\.com\//i.test(String(url));
+export const parseAliMedia = (html) => {
+  const s = String(html);
+  let images = [];
+  const m = s.match(/"imagePathList":(\[[^\]]*\])/);
+  if (m) {
+    try { images = JSON.parse(m[1]); } catch { /* битый JSON — просто без фото */ }
+  }
+  const unesc = (u) => u.replace(/\\u002F/g, "/").replace(/\\\//g, "/").replace(/&amp;/g, "&");
+  const videos = [...new Set([...s.matchAll(/https?:(?:\\?\/){2}(?:[^"'\\\s<>]|\\\/)+?\.mp4(?:[^"'\\\s<>]|\\\/)*/g)].map((x) => unesc(x[0])))];
+  return { images: [...new Set(images.filter((u) => /^https?:\/\//.test(u)))], videos };
+};

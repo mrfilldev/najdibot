@@ -990,6 +990,7 @@ export async function factsPrompt(env, chatId, names) {
 export const NICK_RE = new RegExp(`${BOT_NAMES}[\\s,:]+([^\\n]{1,60}?)\\s+теперь\\s+(?:зовут|звать|зови|называй|называть|будет|будешь)\\s+(?:как\\s+)?[«"]?([^\\n«»"]{2,30}?)[»"]?[\\s.!]*$`, "i");
 
 export async function nickSet(env, chatId, userId, nick) {
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS nicknames (chat_id INTEGER NOT NULL, user_id INTEGER NOT NULL, nick TEXT NOT NULL, PRIMARY KEY (chat_id, user_id))").run().catch(() => {});
   await env.DB.prepare("INSERT OR REPLACE INTO nicknames (chat_id, user_id, nick) VALUES (?,?,?)").bind(chatId, userId, nick).run();
 }
 
