@@ -49,3 +49,33 @@ describe("media", () => {
     expect(musicQueryFromHtml('<meta property="og:title" content="Song"><meta property="og:description" content="Artist · Song · 2020">')).toBe("Artist Song");
   });
 });
+
+import { FEATURES } from "../worker/settings.js";
+import { MUSIC_LOOKUP_RE, yandexDiskApi } from "../container/media.mjs";
+describe("мелочи", () => {
+  it("подписи кнопок настроек влезают без многоточия", () => {
+    for (const [, name] of FEATURES) expect(`✅ ${name}`.length).toBeLessThanOrEqual(16);
+  });
+  it("Dropbox: dl=0 -> dl=1, ссылка без параметров тоже", () => {
+    expect(driveDirect("https://www.dropbox.com/s/abc/f.mp4?dl=0")).toBe("https://www.dropbox.com/s/abc/f.mp4?dl=1");
+    expect(driveDirect("https://www.dropbox.com/s/abc/f.mp4")).toBe("https://www.dropbox.com/s/abc/f.mp4?dl=1");
+    expect(driveDirect("https://youtube.com/x")).toBeNull();
+  });
+  it("Яндекс Диск и поиск музыки", () => {
+    expect(yandexDiskApi("https://disk.yandex.ru/i/AbC")).toContain("public_key=https%3A%2F%2Fdisk.yandex.ru%2Fi%2FAbC");
+    expect(yandexDiskApi("https://example.com/i/x")).toBeNull();
+    expect(MUSIC_LOOKUP_RE.test("https://open.spotify.com/track/1")).toBe(true);
+    expect(MUSIC_LOOKUP_RE.test("https://soundcloud.com/a/b")).toBe(false);
+  });
+  it("названия треков чистятся от хвостов сервисов", () => {
+    expect(musicQueryFromHtml('<meta property="og:title" content="Song by Artist on Apple Music">')).toBe("Song by Artist");
+    expect(musicQueryFromHtml(`<meta property="og:title" content="Song - Single by Artist">`)).toBe("Song");
+    expect(musicQueryFromHtml('<meta property="og:title" content="Numb | Spotify"><meta property="og:description" content="Linkin Park · Meteora · Song · 2003">')).toBe("Linkin Park Numb");
+    expect(musicQueryFromHtml("<title>Artist - Song Lyrics | Genius Lyrics</title>")).toContain("Artist - Song");
+    expect(musicQueryFromHtml("<html></html>")).toBeNull();
+  });
+  it("fxtwitter без медиа", () => {
+    expect(parseFx({})).toMatchObject({ images: [], videos: [] });
+    expect(parseFx({ tweet: { media: { all: [{ type: "video", url: "v" }, { type: "photo", url: "p" }] } } }).videos).toEqual(["v"]);
+  });
+});

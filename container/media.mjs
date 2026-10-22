@@ -77,6 +77,6 @@ export const musicQueryFromHtml = (html) => {
   // Spotify: «Artist · Song · 2020», Deezer/Apple: «Song by Artist»
   const dot = d.split("·").map((x) => x.trim());
   const artist = dot.length > 1 ? dot[0] : "";
-  title = title.replace(/\s+-\s+(?:song|single|EP|album)(?:\s+(?:and|by)\s+.*)?$/i, "");
+  title = title.replace(/\s+-\s+(?:single|EP|album)(?:\s+(?:and|by)\s+.*)?$/i, "");
   return `${artist} ${title}`.replace(/\s+/g, " ").trim().slice(0, 150) || null;
 };
