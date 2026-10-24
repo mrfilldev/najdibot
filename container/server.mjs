@@ -43,6 +43,24 @@ const tg = (method, body) =>
     body: JSON.stringify(body),
   });
 
+// Не больше MAX_JOBS тяжёлых задач (yt-dlp/ffmpeg) одновременно, остальные ждут в очереди.
+const MAX_JOBS = Number(process.env.MAX_JOBS) || 3;
+let activeJobs = 0;
+const waiting = [];
+const withSlot = async (fn, onQueued) => {
+  if (activeJobs >= MAX_JOBS) {
+    onQueued?.(waiting.length + 1);
+    await new Promise((resolve) => waiting.push(resolve));
+  } else activeJobs++;
+  try {
+    return await fn();
+  } finally {
+    const next = waiting.shift();
+    if (next) next(); // слот передаём по цепочке, счётчик не меняется
+    else activeJobs--;
+  }
+};
+
 const run = (cmd, args, okCodes = [0], onOut = null) =>
   new Promise((resolve, reject) => {
     const p = spawn(cmd, args);
@@ -699,7 +717,12 @@ http
     req.on("end", () => {
       // Отвечаем сразу, работаем в фоне: скачивание может идти долго.
       res.writeHead(202).end("accepted");
-      handler(JSON.parse(body)).catch((e) => console.error(e));
+      const args = JSON.parse(body);
+      if (handler === download || handler === audio) {
+        const queued = (pos) =>
+          args.status_id && tg("editMessageText", { chat_id: args.chat_id, message_id: args.status_id, text: `В очереди (№${pos}) ⏳` }).catch(() => {});
+        withSlot(() => handler(args), queued).catch((e) => console.error(e));
+      } else handler(args).catch((e) => console.error(e));
     });
   })
   .listen(8080, () => console.log("listening on 8080"));
