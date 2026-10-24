@@ -704,8 +704,8 @@ export default {
       await reply(env, msg, esc(await feelingsStatus(env, msg.chat.id)));
       return new Response("ok");
     }
-    // В личке бот только качает: ссылки на видео, «сыграйбля», «диджейбля»; остальное (болтовня, казино, погода…) — только в группах.
-    if (isPrivate && text && !/^\/(start|help)(@\w+)?\b/i.test(text) && !PLAY.test(text) && !DJ.test(text) && !DJ_STOP.test(text) && !VIDEO_URL.test(text) && !DOWNLOAD_CMD.test(text)) {
+    // В личке бот только качает (ссылки, «сыграйбля», «диджейбля») и шлёт гс на «робот может сочинить симфонию»; остальное (болтовня, казино, погода…) — только в группах.
+    if (isPrivate && text && !/^\/(start|help)(@\w+)?\b/i.test(text) && !PLAY.test(text) && !DJ.test(text) && !DJ_STOP.test(text) && !VIDEO_URL.test(text) && !SYMPHONY.test(text) && !DOWNLOAD_CMD.test(text)) {
       await reply(env, msg, "В личке я только качаю: кинь ссылку (YouTube, TikTok, Instagram, X, VK, Pinterest, маркетплейсы и др.) или «скачай &lt;ссылка&gt;», либо напиши <code>сыграйбля трек</code>. Поболтать — в группе.");
       return new Response("ok");
     }
