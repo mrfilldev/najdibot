@@ -63,3 +63,13 @@ describe("перепалка", () => {
     expect(roastTidy("Ну ты, «даёшь».")).toBe("ну ты даёшь");
   });
 });
+
+describe("whisper", () => {
+  it("возвращает текст из Workers AI, без AI — null", async () => {
+    const { whisper } = await import("../worker/chat.js");
+    const env = { AI: { run: async () => ({ text: "  привет, как дела  " }) } };
+    expect(await whisper(env, new Uint8Array([1, 2, 3]))).toBe("привет, как дела");
+    expect(await whisper({}, new Uint8Array([1]))).toBeNull();
+    expect(await whisper({ AI: { run: async () => ({ text: " " }) } }, new Uint8Array([1]))).toBeNull();
+  });
+});

@@ -78,3 +78,11 @@ describe("кого звать", () => {
     expect(calls.filter(([m]) => m === "editMessageText").length).toBe(2);
   });
 });
+
+describe("расшифровка гс", () => {
+  it("включена по умолчанию и выключается в настройках", async () => {
+    expect(featureOn(await getSettings(env, -1), "transcribe")).toBe(true);
+    await press(1, "st:transcribe");
+    expect(featureOn(await getSettings(env, -1), "transcribe")).toBe(false);
+  });
+});
