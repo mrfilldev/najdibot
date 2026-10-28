@@ -522,9 +522,12 @@ async function ask(env, system, user, maxTokens = 220, image = null, temperature
       signal: AbortSignal.timeout(timeout),
       body: JSON.stringify({ model: model || env.LLM_MODEL, max_tokens: maxTokens, temperature, messages: [{ role: "system", content: system }, { role: "user", content: image ? [{ type: "text", text: user }, { type: "image_url", image_url: { url: image } }] : user }] }),
     });
-    return (await r.json()).choices?.[0]?.message?.content?.trim() || null;
+    const j = await r.json();
+    const out = j.choices?.[0]?.message?.content?.trim() || null;
+    if (!out) console.error("ask empty:", r.status, model || env.LLM_MODEL, j.choices?.[0]?.finish_reason || "", j.choices?.[0]?.message?.refusal || "", JSON.stringify(j.error || "").slice(0, 300));
+    return out;
   } catch (e) {
-    console.error("ask failed:", e.message);
+    console.error("ask failed:", model || env.LLM_MODEL, e.message);
     return null;
   }
 }
