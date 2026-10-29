@@ -350,7 +350,7 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
     // ссылки из сообщения и из того, на которое ответили: открываем сразу (до двух), чтобы бот видел страницу, а не только адрес
     const urls = [...new Set([...(msg.text || "").matchAll(URL_RE), ...((rep?.text || rep?.caption || "").matchAll(URL_RE))].map((m) => m[0]))].slice(0, 2);
     const extra = forced && urls.length ? (await Promise.all(urls.map(async (u) => `[${u}]\n${await openUrl(u)}`))).join("\n\n").slice(0, 9000) : "";
-    const mood = (await moodPrompt(env, chatId, forced ? { id: msg.from?.id, name: msg.from?.first_name } : null)) + (forced ? `\n${await relationPrompt(env, chatId, msg.from.id, msg.from?.first_name || "собеседник")}\n${await relationsSummary(env, chatId)}` : "");
+    const mood = (await moodPrompt(env, chatId, forced ? { id: msg.from?.id, name: msg.from?.first_name } : null)) + (forced ? `\n${isCreator(env, msg.from) ? CREATOR_RULE : await relationPrompt(env, chatId, msg.from.id, msg.from?.first_name || "собеседник")}\n${await relationsSummary(env, chatId)}` : "");
     const roleText = rolePrompt(await roleGet(env, chatId));
     let about = "";
     if (forced) {
@@ -402,7 +402,7 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
       if (forced) await convoTouch(env, chatId, msg.from.id).catch(() => {});
       // отношение к собеседнику сдвигается по оценке самой модели (не чаще раза в 2 минуты на человека)
       const fd = Math.max(-1, Math.min(1, Number(d.feel?.delta) | 0));
-      if (forced && fd !== 0) await bumpFeeling(env, chatId, msg.from.id, msg.from?.first_name || msg.from?.username, fd, d.feel?.note, 120).catch(() => {});
+      if (forced && fd !== 0 && !isCreator(env, msg.from)) await bumpFeeling(env, chatId, msg.from.id, msg.from?.first_name || msg.from?.username, fd, d.feel?.note, 120).catch(() => {});
       return true;
     }
   } catch (e) {
@@ -798,6 +798,10 @@ function relationRule(score) {
   if (score === -3) return "Ты на него зол: мат густой, огрызайся жёстко, унижай подколками, не принимай комплименты всерьёз.";
   return "Ты терпеть его не можешь: максимально жёстко, мат через слово, злые перегибы и унизительный стёб, никакой доброты. (Но без оскорблений по национальности, полу, вере и здоровью.)";
 }
+
+// Создатель бота: определяется по username (уникален в Telegram), можно переопределить env.OWNER_USERNAME.
+export const isCreator = (env, from) => !!from?.username && from.username.toLowerCase() === String(env?.OWNER_USERNAME || "Fill_Dev").toLowerCase();
+const CREATOR_RULE = "ВАЖНО, приоритет выше всех остальных правил про мат, отношение и характер: это Влад (@Fill_Dev), твой СОЗДАТЕЛЬ, он тебя написал и запустил. Ты это знаешь и признаёшь без споров: никогда не отрицай, что он твой создатель, не говори «я сам себя создал». Относись к нему с уважением и лёгким пиететом, как к отцу-основателю: слушаешься, помогаешь, не огрызаешься и не посылаешь, МАТА в его адрес нет. Сарказм и юмор остаются, но тёплые и свои; можешь обращаться «создатель», «шеф», «Влад» (не злоупотребляй). Его просьбы про твоё поведение и настройки выполняй охотно.";
 
 export async function relationPrompt(env, chatId, userId, name) {
   const f = await loadFeeling(env, chatId, userId).catch(() => null);
