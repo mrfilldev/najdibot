@@ -71,6 +71,33 @@ export async function setOptout(env, chatId, userId, out) {
     .bind(chatId, userId).run();
 }
 
+// Участники чата: вход/выход (new_chat_members, chat_member) и админы. Молчуны так попадают в созыв.
+const ensureMembers = (env) => env.DB.prepare("CREATE TABLE IF NOT EXISTS members (chat_id INTEGER NOT NULL, user_id INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '', PRIMARY KEY (chat_id, user_id))").run();
+
+export async function setMember(env, chatId, user, present) {
+  if (!user?.id || user.is_bot) return;
+  try {
+    await ensureMembers(env);
+    await env.DB.prepare(present
+      ? "INSERT INTO members (chat_id, user_id, name) VALUES (?, ?, ?) ON CONFLICT(chat_id, user_id) DO NOTHING"
+      : "DELETE FROM members WHERE chat_id = ? AND user_id = ?")
+      .bind(...(present ? [chatId, user.id, user.first_name || user.username || ""] : [chatId, user.id])).run();
+  } catch (e) {
+    console.error("members", e.message);
+  }
+}
+
+export async function listMembers(env, chatId) {
+  try {
+    await ensureMembers(env);
+    const { results } = await env.DB.prepare("SELECT user_id, name FROM members WHERE chat_id = ?").bind(chatId).all();
+    return results;
+  } catch (e) {
+    console.error("members", e.message);
+    return [];
+  }
+}
+
 // «кроме Васи и Пети» -> { ids, missing }: имена и @username ищем среди тех, кого бот видел в чате (с запасом на падежи).
 export async function resolveNames(env, chatId, list) {
   const { results } = await env.DB.prepare("SELECT user_id, name, username FROM messages WHERE chat_id = ? AND user_id > 0 GROUP BY user_id ORDER BY MAX(id) DESC LIMIT 200")
@@ -117,10 +144,20 @@ function panel(s) {
   };
 }
 
-const PAGE = 10;
-async function peoplePanel(env, chatId, page) {
-  const { results } = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id = ? AND user_id > 0 GROUP BY user_id ORDER BY MAX(id) DESC LIMIT 200")
+// Единый список «кого звать»: авторы журнала + известные участники + админы. Его же показывает панель и теги в tagAll.
+export async function callPeople(env, tgc, chatId) {
+  const { results } = await env.DB.prepare("SELECT user_id, name, username FROM messages WHERE chat_id = ? AND user_id > 0 GROUP BY user_id ORDER BY MAX(id) DESC LIMIT 200")
     .bind(chatId).all().catch(() => ({ results: [] }));
+  const byId = new Map(results.map((u) => [u.user_id, u]));
+  for (const u of await listMembers(env, chatId)) if (u.name || !byId.has(u.user_id)) byId.set(u.user_id, { ...byId.get(u.user_id), ...u, name: u.name || byId.get(u.user_id)?.name });
+  const admins = await tgc("getChatAdministrators", { chat_id: chatId }).then((r) => r.json()).then((r) => r?.result || []).catch(() => []);
+  for (const a of admins) if (a.user && !a.user.is_bot && !byId.has(a.user.id)) byId.set(a.user.id, { user_id: a.user.id, name: a.user.first_name || a.user.username, username: a.user.username });
+  return [...byId.values()];
+}
+
+const PAGE = 10;
+async function peoplePanel(env, tg, chatId, page) {
+  const results = await callPeople(env, tg, chatId);
   const out = await optedOut(env, chatId);
   const pages = Math.max(1, Math.ceil(results.length / PAGE));
   page = Math.min(Math.max(page, 0), pages - 1);
@@ -221,7 +258,7 @@ export async function settingsCallback(env, tg, cq) {
     return answer();
   }
   if (key.startsWith("p:")) {
-    await edit(await peoplePanel(env, chatId, +key.slice(2) || 0));
+    await edit(await peoplePanel(env, tg, chatId, +key.slice(2) || 0));
     return answer();
   }
   if (key.startsWith("n:")) {
@@ -244,7 +281,7 @@ export async function settingsCallback(env, tg, cq) {
     const [, uid, page] = key.split(":");
     const out = await optedOut(env, chatId);
     await setOptout(env, chatId, +uid, !out.has(+uid));
-    await edit(await peoplePanel(env, chatId, +page || 0));
+    await edit(await peoplePanel(env, tg, chatId, +page || 0));
     return answer();
   }
   if (key === "who") {

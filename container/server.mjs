@@ -300,7 +300,8 @@ async function reportDownload(rec) {
   }
 }
 
-async function download({ chat_id, message_id, url, user_id, status_id, phrases = [] }) {
+async function download({ chat_id, message_id, url, user_id, status_id, phrases = [], delete_src = false }) {
+  let photoSent = false;
   const reply_parameters = { message_id };
   // Реальный прогресс: этапы со своими долями шкалы (скачивание, перекодирование, отправка), шкала только растёт
   const STAGES = { dl: [0, 0.15], enc: [0.15, 0.7], send: [0.85, 0.15] };
@@ -397,7 +398,10 @@ async function download({ chat_id, message_id, url, user_id, status_id, phrases 
   } catch (e) {
     console.error("download failed:", e.message);
     rec.error = reason(e);
-    if (NO_VIDEO_RE.test(e.message) && (await sendInstagramPhoto({ chat_id, message_id, url }))) return;
+    if (NO_VIDEO_RE.test(e.message) && (await sendInstagramPhoto({ chat_id, message_id, url }))) {
+      photoSent = true;
+      return;
+    }
     await tg("sendMessage", {
       chat_id,
       reply_parameters,
@@ -406,6 +410,8 @@ async function download({ chat_id, message_id, url, user_id, status_id, phrases 
   } finally {
     clearInterval(spin);
     if (status_id) await tg("deleteMessage", { chat_id, message_id: status_id }).catch(() => {});
+    // Нужны права админа на удаление сообщений; без них Telegram вернёт ошибку, её глотаем
+    if (delete_src && (rec.ok || photoSent)) await tg("deleteMessage", { chat_id, message_id }).catch(() => {});
     await rm(dir, { recursive: true, force: true });
     await reportDownload(rec);
   }

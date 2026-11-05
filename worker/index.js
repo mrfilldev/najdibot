@@ -1,6 +1,6 @@
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { getSettings, featureOn, nickReply, showSettings, settingsCallback, optedOut, setOptout, resolveNames } from "./settings.js";
+import { getSettings, featureOn, nickReply, showSettings, settingsCallback, optedOut, setOptout, resolveNames, setMember, listMembers, callPeople } from "./settings.js";
 import { transcribe, whisper, NICK_RE, nickSet, ROLE_OFF_RE, ROLE_RE, roleEnd, roleGet, roleStart, LOUD_RE, QUIET_RE, quietEnd, quietLeft, quietStart, ALIAS_RE, APOLOGY_RE, STYLE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, updateFacts, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
@@ -125,6 +125,9 @@ async function typicalSeconds(env, site) {
 
 async function startDownload(env, msg, url) {
   const chat_id = msg.chat.id;
+  // В группе после успешной отправки убираем сообщение со ссылкой, если в нём больше ничего нет (комментарий не теряем)
+  const rest = (msg.text || "").replace(url, "").replace(/^\s*(?:саня[\s,]+)?(?:скачай|качни|скачать|загрузи|download)[\s,:;!.-]*/i, "").trim();
+  const delete_src = msg.chat.type !== "private" && !rest;
   const site = videoSite(url);
   const list = LOADING_PHRASES;
   let status_id = null;
@@ -139,7 +142,7 @@ async function startDownload(env, msg, url) {
   }
   await dl(env, "/download", {
     method: "POST",
-    body: JSON.stringify({ chat_id, message_id: msg.message_id, url, user_id: msg.from?.id, status_id, phrases: list }),
+    body: JSON.stringify({ chat_id, message_id: msg.message_id, url, user_id: msg.from?.id, status_id, phrases: list, delete_src }),
   });
 }
 
@@ -438,9 +441,8 @@ const DJ_STOP = /^диджейбля[\s,:;!.-]*(?:стоп|стой|хватит
 async function tagAll(env, chatId, excludeId, head, send, except = []) {
   const skip = await optedOut(env, chatId);
   for (const id of except) skip.add(id);
-  const { results } = await env.DB.prepare("SELECT user_id, name FROM messages WHERE chat_id=? AND user_id>0 GROUP BY user_id ORDER BY MAX(id) DESC LIMIT 200")
-    .bind(chatId).all().catch(() => ({ results: [] }));
-  const people = results.filter((u) => u.user_id !== excludeId && !skip.has(u.user_id));
+  const all = await callPeople(env, (m, b) => tg(env, m, b), chatId);
+  const people = all.filter((u) => u.user_id !== excludeId && !skip.has(u.user_id));
   if (!people.length) return false;
   const tags = people.map((u) => `<a href="tg://user?id=${u.user_id}">${esc(u.name || "участник")}</a>`);
   for (let i = 0; i < tags.length; i += 30) {
@@ -583,6 +585,14 @@ export default {
       return new Response("ok");
     }
     const msg = update.message;
+    // Учёт участников для созыва
+    if (update.chat_member) {
+      const cm = update.chat_member;
+      await setMember(env, cm.chat.id, cm.new_chat_member.user, !["left", "kicked"].includes(cm.new_chat_member.status));
+      return new Response("ok");
+    }
+    if (msg?.new_chat_members) for (const u of msg.new_chat_members) await setMember(env, msg.chat.id, u, true);
+    if (msg?.left_chat_member) await setMember(env, msg.chat.id, msg.left_chat_member, false);
     // Голосовые и кружки расшифровываем (Whisper): дальше расшифровка работает как обычный текст сообщения
     if (msg && (msg.voice || msg.video_note) && !msg.from?.is_bot && !msg.text) {
       const tr = await transcribe(env, msg).catch((e) => (console.error("transcribe", e.message), null));
