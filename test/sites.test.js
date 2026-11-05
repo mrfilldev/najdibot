@@ -8,7 +8,7 @@ const yes = [
   "https://www.twitch.tv/videos/99", "https://clips.twitch.tv/Foo", "https://www.pixiv.net/en/artworks/1", "https://www.wildberries.ru/catalog/12345/detail.aspx",
   "https://www.ozon.ru/product/some-123/", "https://www.amazon.com/Some-Thing/dp/B000", "https://a.aliexpress.com/_EHNy1se", "https://www.avito.ru/moskva/telefony/x_123",
   "https://drive.google.com/file/d/AbC/view", "https://open.spotify.com/track/xyz", "https://soundcloud.com/a/b", "https://music.yandex.ru/album/1/track/2",
-  "https://pikabu.ru/story/foo_123", "https://www.threads.net/@u/post/Abc",
+  "https://pikabu.ru/story/foo_123", "https://www.threads.net/@u/post/Abc", "https://www.threads.com/share/BAHehN08R2",
 ];
 const no = ["https://x.com/user", "https://vk.com/durov", "https://t.me/durov", "https://t.me/durov/123", "https://github.com/a/b", "https://google.com", "https://example.com/page"];
 

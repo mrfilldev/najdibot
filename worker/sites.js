@@ -16,7 +16,7 @@ const VIDEO_SITES = [
   "twitch\\.tv\\/(?:videos\\/\\d+|\\w+\\/clip\\/)", "clips\\.twitch\\.tv\\/", "kick\\.com\\/[\\w-]+(?:\\/clips\\/|\\?clip=)",
   "vimeo\\.com\\/(?:channels\\/[\\w-]+\\/)?\\d+", "dailymotion\\.com\\/video\\/", "dai\\.ly\\/",
   "bilibili\\.com\\/video\\/", "b23\\.tv\\/", "bsky\\.app\\/profile\\/[^\\/\\s]+\\/post\\/",
-  "threads\\.(?:net|com)\\/@[\\w.]+\\/post\\/", "linkedin\\.com\\/(?:posts|feed\\/update|video)\\/",
+  "threads\\.(?:net|com)\\/(?:@[\\w.]+\\/post|t|share)\\/", "linkedin\\.com\\/(?:posts|feed\\/update|video)\\/",
   "tumblr\\.com\\/(?:post\\/)?[\\w-]*\\/?\\d{8,}", "9gag\\.com\\/gag\\/", "imgur\\.com\\/(?:a|gallery|t\\/[\\w-]+)\\/\\w+", "i\\.imgur\\.com\\/\\w+",
   "streamable\\.com\\/\\w+", "coub\\.com\\/view\\/", "ted\\.com\\/talks\\/", "odysee\\.com\\/@", "imdb\\.com\\/video\\/",
   "smotrim\\.ru\\/video\\/", "substack\\.com\\/(?:p|@[\\w-]+\\/p)", "khanacademy\\.org\\/.+\\/v\\/",

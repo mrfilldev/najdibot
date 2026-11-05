@@ -333,7 +333,7 @@ async function download({ chat_id, message_id, url, user_id, status_id, phrases 
       return;
     }
     if (PAGE_ONLY_RE.test(url) || twitterId(url)) {
-      if (!(await sendPageMedia(ctxArgs))) throw new Error("ERROR: на странице нет фото и видео, которые можно достать (возможно, сайт закрыт от ботов)");
+      if (!(await sendPageMedia(ctxArgs))) throw new Error(/threads\.(?:net|com)\//i.test(url) ? "ERROR: Threads отдаёт видео только залогиненным, у бота такого доступа пока нет" : "ERROR: на странице нет фото и видео, которые можно достать (возможно, сайт закрыт от ботов)");
       rec.ok = 1;
       rec.dl_ms = Date.now() - t0;
       return;
