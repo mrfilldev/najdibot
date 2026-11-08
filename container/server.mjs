@@ -588,10 +588,10 @@ async function reportRadio(rec) {
 
 const radioMarkup = (info) => ({
   inline_keyboard: [[
-    { text: "👍", callback_data: `rd:u:${info.id}` },
-    { text: "👎", callback_data: `rd:d:${info.id}` },
-    { text: "⏭", callback_data: `rd:n:${info.id}` },
-    { text: "⏹", callback_data: `rd:s:${info.id}` },
+    { text: "♡", callback_data: `rd:u:${info.id}` },
+    { text: "♡̸", callback_data: `rd:d:${info.id}` },
+    { text: "⏭︎", callback_data: `rd:n:${info.id}` },
+    { text: "■", callback_data: `rd:s:${info.id}` },
   ]],
 });
 

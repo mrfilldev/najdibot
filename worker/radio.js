@@ -16,10 +16,10 @@ const parse = (s, d) => {
 export const radioKeyboard = (id, mark = "") => ({
   inline_keyboard: [
     [
-      { text: mark === "u" ? "👍 ✓" : "👍", callback_data: `rd:u:${id}` },
-      { text: mark === "d" ? "👎 ✓" : "👎", callback_data: `rd:d:${id}` },
-      { text: "⏭", callback_data: `rd:n:${id}` },
-      { text: "⏹", callback_data: `rd:s:${id}` },
+      { text: mark === "u" ? "♥" : "♡", callback_data: `rd:u:${id}` },
+      { text: mark === "d" ? "♡̸ ✓" : "♡̸", callback_data: `rd:d:${id}` },
+      { text: "⏭︎", callback_data: `rd:n:${id}` },
+      { text: "■", callback_data: `rd:s:${id}` },
     ],
   ],
 });
