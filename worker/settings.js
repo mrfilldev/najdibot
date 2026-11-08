@@ -4,6 +4,7 @@ import { isOwner } from "./owner.js";
 
 export const FEATURES = [
   ["chat", "Болтовня"],
+  ["digest", "Сводка"],
   ["poke", "Доёбы"],
   ["casino", "Казино"],
   ["weather", "Погода"],
@@ -114,6 +115,8 @@ export async function resolveNames(env, chatId, list) {
   return { ids, missing };
 }
 
+export const isDigestCommand = (text) => /^\/(?:сводка|digest)(?:@\w+)?(?=\s|$)/i.test(text);
+
 export const featureOn = (s, key) => s.flags[key] !== false;
 
 function panel(s) {
@@ -133,6 +136,7 @@ function panel(s) {
       "Настройки функций в этом чате. Нажми на кнопку, чтобы включить или выключить.",
       "",
       "Болтовня: болтает и лает в ответ",
+      "Сводка: юмористическая сводка чата за 12 часов",
       "Активность: как часто бот сам вступает в разговор (только админы)",
       "Доёбы: цепляется к людям",
       "Музыка: сыграйбля и диджейбля",
