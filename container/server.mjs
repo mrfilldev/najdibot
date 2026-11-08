@@ -1,3 +1,4 @@
+import { errorMention } from './owner.mjs';
 // Скачивает видео по ссылке (YouTube/TikTok) и отправляет в Telegram-чат.
 // Запросы приходят от Worker: POST /download {chat_id, message_id, url}.
 import http from "node:http";
@@ -72,7 +73,7 @@ const run = (cmd, args, okCodes = [0], onOut = null) =>
 
 // Короткая причина для пользователя: строка «ERROR: …» из вывода yt-dlp.
 // Кого звать при любой ошибке
-const OWNER = "@Fill_Dev";
+
 // Известные причины отказа yt-dlp -> понятный текст. Остальное показываем как есть (через reason).
 const KNOWN_FAILS = [
   [/isn't available to everyone|can't be seen by certain audiences|private|login required|log in|age-restricted|confirm your age|sign in to confirm/i, "это видео недоступно без входа в аккаунт (закрытый, возрастной или ограниченный пост)"],
@@ -84,7 +85,7 @@ const KNOWN_FAILS = [
 const failText = (e, what = "видео") => {
   const known = KNOWN_FAILS.find(([re]) => re.test(e.message));
   const why = known ? known[1] : reason(e);
-  return `Не смог скачать ${what}: ${why}. ${OWNER}`;
+  return `Не смог скачать ${what}: ${why}.`;
 };
 const reason = (e) => {
   const line = String(e.message).split("\n").reverse().find((l) => /ERROR/i.test(l)) ?? String(e.message).split("\n").pop();
@@ -300,7 +301,7 @@ async function reportDownload(rec) {
   }
 }
 
-async function download({ chat_id, message_id, url, user_id, status_id, phrases = [], delete_src = false }) {
+async function download({ owner_id, chat_id, message_id, url, user_id, status_id, phrases = [], delete_src = false }) {
   let photoSent = false;
   const reply_parameters = { message_id };
   // Реальный прогресс: этапы со своими долями шкалы (скачивание, перекодирование, отправка), шкала только растёт
@@ -405,7 +406,7 @@ async function download({ chat_id, message_id, url, user_id, status_id, phrases 
     await tg("sendMessage", {
       chat_id,
       reply_parameters,
-      text: NO_VIDEO_RE.test(e.message) ? `В этом посте нет видео, а фото достать не вышло. ${OWNER}` : failText(e),
+      text: NO_VIDEO_RE.test(e.message) ? `В этом посте нет видео, а фото достать не вышло.${await errorMention(tg, chat_id, owner_id)}` : failText(e) + await errorMention(tg, chat_id, owner_id),
     });
   } finally {
     clearInterval(spin);
@@ -467,7 +468,7 @@ async function sendTrack({ chat_id, message_id, query, accept, markup }) {
   }
 }
 
-async function audio({ chat_id, message_id, query }) {
+async function audio({ owner_id, chat_id, message_id, query }) {
   try {
     await sendTrack({ chat_id, message_id, query });
   } catch (e) {
@@ -475,7 +476,7 @@ async function audio({ chat_id, message_id, query }) {
     await tg("sendMessage", {
       chat_id,
       reply_parameters: { message_id },
-      text: failText(e, "трек"),
+      text: failText(e, "трек") + await errorMention(tg, chat_id, owner_id),
     });
   }
 }
@@ -507,7 +508,7 @@ async function djPick(history) {
   }
 }
 
-async function dj({ chat_id, message_id, query }) {
+async function dj({ owner_id, chat_id, message_id, query }) {
   if (djSessions.has(chat_id)) djSessions.get(chat_id).stop = true; // новая сессия вытесняет старую
   const s = { stop: false };
   djSessions.set(chat_id, s);
@@ -525,7 +526,7 @@ async function dj({ chat_id, message_id, query }) {
       } catch (e) {
         console.error("dj track failed:", e.message);
         if (played === 0) {
-          await tg("sendMessage", { chat_id, reply_parameters: { message_id }, text: failText(e, "трек") });
+          await tg("sendMessage", { chat_id, reply_parameters: { message_id }, text: failText(e, "трек") + await errorMention(tg, chat_id, owner_id) });
           return;
         }
         history.push(e.dup ? `${next} (уже играл, выбери ДРУГОЙ трек другого исполнителя)` : `${next} (не вышло, не предлагай снова)`);
@@ -600,7 +601,7 @@ const radioMarkup = (info) => ({
 });
 
 // Шлёт `count` треков подряд (плеер Telegram сам играет их без пауз); после каждого отчитывается Worker'у.
-async function radio({ chat_id, message_id, query, count = 1, gen = 0, queue = [], played = [], bad = [], reseed = null }) {
+async function radio({ owner_id, chat_id, message_id, query, count = 1, gen = 0, queue = [], played = [], bad = [], reseed = null }) {
   let sent = 0;
   try {
     let rest = queue;
@@ -645,7 +646,7 @@ async function radio({ chat_id, message_id, query, count = 1, gen = 0, queue = [
     if (!sent) throw new Error(fails ? "ERROR: подряд не скачалось несколько треков" : "ERROR: закончились идеи для радио");
   } catch (e) {
     console.error("radio failed:", e.message);
-    if (!sent) await tg("sendMessage", { chat_id, ...(message_id ? { reply_parameters: { message_id } } : {}), text: failText(e, "трек для радио") });
+    if (!sent) await tg("sendMessage", { chat_id, ...(message_id ? { reply_parameters: { message_id } } : {}), text: failText(e, "трек для радио") + await errorMention(tg, chat_id, owner_id) });
   }
 }
 
@@ -726,7 +727,7 @@ async function ttsPcm(text) {
   return pcm;
 }
 
-async function weather({ chat_id, message_id, city, lat, lon }) {
+async function weather({ owner_id, chat_id, message_id, city, lat, lon }) {
   const dir = await mkdtemp(path.join(tmpdir(), "wx-"));
   try {
     await tg("sendChatAction", { chat_id, action: "record_voice" });
@@ -750,7 +751,7 @@ async function weather({ chat_id, message_id, city, lat, lon }) {
     if (!r.ok) throw new Error(`Telegram: ${r.status} ${(await r.text()).slice(0, 200)}`);
   } catch (e) {
     console.error("weather failed:", e.message);
-    await tg("sendMessage", { chat_id, reply_parameters: { message_id }, text: `Не смог озвучить погоду, глянь в окно. ${OWNER}` });
+    await tg("sendMessage", { chat_id, reply_parameters: { message_id }, text: `Не смог озвучить погоду, глянь в окно.${await errorMention(tg, chat_id, owner_id)}` });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

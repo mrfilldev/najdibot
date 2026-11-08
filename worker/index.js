@@ -274,7 +274,7 @@ const WELCOME = [
 const HELP = [
   "<b>Что я умею</b>",
   "",
-  "<code>/settings</code> — включить или выключить мои функции в этом чате, выбрать кого звать в созыв и задать людям клички",
+  "<code>/settings</code> — включить или выключить мои функции, настроить активность в чате, выбрать кого звать в созыв и задать людям клички",
   "",
   "<b>Видео</b>",
   "Кинь ссылку (YouTube, Shorts, TikTok, Instagram, Reddit, X, VK, Pinterest, AliExpress и маркетплейсы, облачные диски, музыкальные сайты — около 100 сайтов) или напиши <code>скачай &lt;ссылка&gt;</code> — пришлю видео, фото или аудио",
@@ -1009,7 +1009,7 @@ export default {
         await reply(env, msg, POKE_BYE[Math.floor(Math.random() * POKE_BYE.length)]);
         return new Response("ok");
       }
-      if ((addressed || !quiet) && (await maybeChat(env, msg, (m, b) => tg(env, m, b), { forced: addressed || inConvo }))) {
+      if ((addressed || !quiet) && (await maybeChat(env, msg, (m, b) => tg(env, m, b), { forced: addressed || inConvo, activity: S?.flags.activity }))) {
         return new Response("ok");
       }
       if (!quiet && shouldBark(msg.chat.id)) {

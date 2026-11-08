@@ -1,3 +1,4 @@
+import { ownerMention } from './owner.js';
 // Бот как участник чата: помнит последние сообщения (D1), иногда сам вставляет слово,
 // ставит реакции, шлёт мемы с Reddit (через meme-api.com) или молчит.
 
@@ -13,13 +14,14 @@ export const STYLE = `КТО ТЫ: Санни (он же Найдибот, Са�
 const REACTIONS = ["👍", "👎", "🔥", "😁", "🤔", "🤯", "😱", "🤡", "💩", "🥱", "🤣", "💯", "🗿", "👀", "😭", "🤨", "👏", "🤓", "😎", "🥴"];
 const MEME_SUBS = ["memes", "dankmemes", "ProgrammerHumor", "me_irl", "wholesomememes", "funny"];
 
-const CHANCE = 0; // самопроизвольные вбросы отключены (было 0.02, каждое 50-е сообщение); вернуть: 0.02
-const COOLDOWN = 60_000; // между самопроизвольными вбросами в одном чате
+const ACTIVITY_CHANCES = { low: 0.10, medium: 0.15, high: 0.25 };
+const COOLDOWN = 300_000; // между самопроизвольными вбросами в одном чате
+export const shouldSpontaneouslyReply = (level, random, elapsed, messageAge = 0) => messageAge <= 86400 && elapsed >= COOLDOWN && random < (ACTIVITY_CHANCES[level] ?? ACTIVITY_CHANCES.low);
 const COOLDOWN_FORCED = 1_500; // когда обратились напрямую
 const CONTEXT = 40; // сколько последних сообщений видит модель
 const KEEP = 300; // сколько храним на чат
 const lastTalk = new Map();
-const FALLBACKS = ["Завис, спроси ещё раз. @Fill_Dev", "Чё-то я туплю, повтори. @Fill_Dev", "Не расслышал, давай заново. @Fill_Dev", "Секунду, мозги перезагружаются. Повтори. @Fill_Dev"];
+const FALLBACKS = ["Завис, спроси ещё раз.", "Чё-то я туплю, повтори.", "Не расслышал, давай заново.", "Секунду, мозги перезагружаются. Повтори."];
 
 const SYSTEM = `${STYLE}\n\nТы участник дружеского Telegram-чата (14 человек), откликаешься на Найдибот, Санни, Sunny, Саныч. Характер: саркастичный, остроумный, по умолчанию матерись свободно и часто, как пацан в дружеском чате (хотя бы пара матерных слов в реплике), чёрный юмор и 18+ без ограничений. НО если ниже указано положительное отношение к собеседнику (плюс), то с ним мата нет вообще, это правило сильнее всех остальных про мат; а при минусе мат обязателен и тем жёстче, чем глубже минус. Пиши по-русски, без вступлений, без «как ИИ». Не лезь без повода. Если переписка скучная или тебе нечего добавить — молчи.
 
@@ -326,12 +328,12 @@ export async function roastReply(env, { rows, asker, replied, mood, about }) {
 }
 
 // Возвращает true, если что-то сделал (написал, поставил реакцию, прислал мем).
-export async function maybeChat(env, msg, tg, { forced = false } = {}) {
+export async function maybeChat(env, msg, tg, { forced = false, activity = "low" } = {}) {
   if (!env.DB || !env.OPENROUTER_API_KEY) return false;
   const chatId = msg.chat.id;
   const now = Date.now();
-  if (now - (lastTalk.get(chatId) ?? 0) < (forced ? COOLDOWN_FORCED : COOLDOWN)) return false;
-  if (!forced && Math.random() > CHANCE) return false;
+  const elapsed = now - (lastTalk.get(chatId) ?? 0);
+  if (forced ? elapsed < COOLDOWN_FORCED : !shouldSpontaneouslyReply(activity, Math.random(), elapsed, msg.date ? now / 1000 - msg.date : Infinity)) return false;
   lastTalk.set(chatId, now); // ставим до вызова модели, чтобы не плодить запросы
 
   try {
@@ -377,7 +379,7 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
       if (d2?.action === "text") d = { ...d, ...d2 };
       if (MAT_RE.test(String(d.text))) d.text = String(d.text).replace(new RegExp(MAT_RE.source.replace(/^\(\?:\^\|\[\^а-яё\]\)/, ""), "gi"), "…");
     }
-    if (forced && d?.action !== "text") d = { action: "text", text: pick(FALLBACKS) };
+    if (forced && d?.action !== "text") d = { action: "text", text: pick(FALLBACKS) + await ownerMention(env, tg, chatId) };
     if (!d || d.action === "skip") return false;
 
     if (d.action === "reaction" && REACTIONS.includes(d.emoji)) {
@@ -408,7 +410,7 @@ export async function maybeChat(env, msg, tg, { forced = false } = {}) {
   } catch (e) {
     console.error("chat failed:", e.message);
     if (forced) {
-      await tg("sendMessage", { chat_id: chatId, text: pick(FALLBACKS), reply_parameters: { message_id: msg.message_id } }).catch(() => {});
+      await tg("sendMessage", { chat_id: chatId, text: pick(FALLBACKS) + await ownerMention(env, tg, chatId), reply_parameters: { message_id: msg.message_id } }).catch(() => {});
       return true;
     }
   }
@@ -889,7 +891,7 @@ export const SELF_RE = /(?:расскаж\S*\s+(?:о|про)\s+себе|кто\s
 
 export const SELF_KNOWLEDGE = `Факты о тебе (говори по ним своими словами, в характере, не выдумывай того, чего здесь нет; если просят коротко, отвечай коротко):
 КТО: ты робот, но свой в доску и ровесник чата (по ощущениям 20-30 лет), в теме интернета, мемов, игр и техники. Тебя зовут Санни, также Саныч, Саня, Сань, Санёк, Sunny, найдибот, найдибля. Ты бот-участник этого чата: саркастичный, ревнивый, с настроением и личным отношением к каждому.
-КАК ЧАСТО: сам в разговор не вклиниваешься (вбросы отключены), только отвечаешь; в группах иногда лаешь «ГАВ» (примерно на каждое 25-е сообщение, не чаще раза в 2 минуты); сводку чата шлёшь только по /сводка; отвечаешь всегда, когда тебя зовут по имени или отвечают на твоё сообщение; после разговора ещё 10 минут по смыслу понимаешь, обращаются ли к тебе без имени.
+КАК ЧАСТО: иногда сам вступаешь в разговор, частоту админ выбирает в /settings; в группах иногда лаешь «ГАВ» (примерно на каждое 25-е сообщение, не чаще раза в 2 минуты); сводку чата шлёшь только по /сводка; отвечаешь всегда, когда тебя зовут по имени или отвечают на твоё сообщение; после разговора ещё 10 минут по смыслу понимаешь, обращаются ли к тебе без имени.
 ЧТО УМЕЕШЬ: скачивать видео по ссылке с YouTube, TikTok, Instagram (до 50 МБ); присылать музыку («сыграйбля название трека»); голосом рассказывать погоду («какая щас погода в Москве», 7 городов); крутить казино («депни в казик»); присылать «координаты» со стёбом; цепляться к людям («Санни доебись до …»); читать фото и ссылки, гуглить и открывать страницы; кидать мемы и ставить реакции; отвечать голосовыми на «а робот может сочинить симфонию?» и «ГАВ ГАВ ГАВ»; помнить последние ~300 сообщений чата. Если ты админ чата, админы могут пользоваться командами модерации (/mute, /ban, /warn и др.). Команды: /help, /mood, /relations, /rules_of_doeb, /forget, /сводка, /about.
 ПОТИШЕ: если я слишком часто лезу, можно сказать «Санни, потише / полегче / сбавь темп» (или /quiet): 3 часа я не вбрасываю сам и отвечаю только на прямое обращение. Вернуть: «Санни, громче» или /loud.
 ТАЙМАУТ: меня можно отправить спать («Санни, поспи», «возьми таймаут на 6 часов», /sleep 6; по умолчанию 6 часов, максимум 24). Пока я сплю, молчу полностью (на обращение только реакция 😴, сводку не шлю). Разбудить: «Санни, проснись» или /wake. Усыпить и разбудить может любой участник.

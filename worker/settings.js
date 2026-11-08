@@ -123,6 +123,7 @@ function panel(s) {
       callback_data: `st:${k}`,
     })));
   }
+  rows.push([{ text: `💬 Активность: ${{ low: "низкая", medium: "средняя", high: "высокая" }[s.flags.activity] || "низкая"}`, callback_data: "st:activity" }]);
   rows.push([{ text: "👥 Кого звать в созыв", callback_data: "st:p:0" }]);
   rows.push([{ text: "🏷 Клички участников", callback_data: "st:n:0" }]);
   rows.push([{ text: `Кто меняет: ${s.who === "all" ? "все" : "только админы"}`, callback_data: "st:who" }]);
@@ -131,6 +132,7 @@ function panel(s) {
       "Настройки функций в этом чате. Нажми на кнопку, чтобы включить или выключить.",
       "",
       "Болтовня: болтает и лает в ответ",
+      "Активность: как часто бот сам вступает в разговор (только админы)",
       "Доёбы: цепляется к людям",
       "Музыка: сыграйбля и диджейбля",
       "Скачивание: видео, фото и файлы по ссылке",
@@ -284,7 +286,12 @@ export async function settingsCallback(env, tg, cq) {
     await edit(await peoplePanel(env, tg, chatId, +page || 0));
     return answer();
   }
-  if (key === "who") {
+  if (key === "activity") {
+    if (!admin) return answer("Активность могут менять только админы.");
+    const levels = ["low", "medium", "high"];
+    const current = levels.indexOf(s.flags.activity);
+    s.flags.activity = levels[((current < 0 ? 0 : current) + 1) % levels.length];
+  } else if (key === "who") {
     if (!admin) return answer("Это могут менять только админы.");
     s.who = s.who === "all" ? "admins" : "all";
   } else if (FEATURES.some(([k]) => k === key)) {
