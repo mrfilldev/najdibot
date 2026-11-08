@@ -40,7 +40,7 @@ Telegram-бот @najdibot на Cloudflare Workers (+ Container для скачи
 - `worker/index.js` — Worker: webhook Telegram, триггеры, inline, LLM (OpenRouter).
 - `container/` — контейнер с `yt-dlp` и `ffmpeg` для видео и музыки.
 - `legacy-python/` — первая версия на aiogram (polling), не используется.
-- Секреты в Worker: `BOT_TOKEN`, `WEBHOOK_SECRET`, `OPENROUTER_API_KEY`. Модель — `LLM_MODEL` в `wrangler.toml`.
+- Секреты в Worker: `BOT_TOKEN`, `WEBHOOK_SECRET`, `OPENROUTER_API_KEY`. Модель — `LLM_MODEL` в `wrangler.toml`. Для упоминания @Fill_Dev при ошибках задайте в Worker числовой Telegram ID в `OWNER_ID`; без него бот попробует найти ID в сохранённых сообщениях. Если ID неизвестен или Telegram не подтвердил участие в чате, сообщение отправляется без упоминания.
 - Деплой: `DOCKER_CONTEXT=desktop-linux npx wrangler deploy`; webhook: `./set-webhook.sh <url>`.
 
 ## Служебное

@@ -73,3 +73,16 @@ describe("whisper", () => {
     expect(await whisper({ AI: { run: async () => ({ text: " " }) } }, new Uint8Array([1]))).toBeNull();
   });
 });
+
+describe('спонтанная активность', () => {
+  it('учитывает уровень и пятиминутный интервал', async () => {
+    const { shouldSpontaneouslyReply } = await import('../worker/chat.js');
+    expect(shouldSpontaneouslyReply('low', 0.09, 300000, 86400)).toBe(true);
+    expect(shouldSpontaneouslyReply('low', 0.10, 300000, 86400)).toBe(false);
+    expect(shouldSpontaneouslyReply('medium', 0.14, 300000, 86400)).toBe(true);
+    expect(shouldSpontaneouslyReply('high', 0.24, 300000, 86400)).toBe(true);
+    expect(shouldSpontaneouslyReply('high', 0.01, 300000, 86401)).toBe(false);
+    expect(shouldSpontaneouslyReply('high', 0.01, 299999)).toBe(false);
+    expect(shouldSpontaneouslyReply('unknown', 0.10, 300000)).toBe(false);
+  });
+});

@@ -1,3 +1,4 @@
+import { ownerMention } from './owner.js';
 // Модерация чата: команды только для админов, цель — автор сообщения, на которое ответили.
 // Боту нужны права админа: «удалять сообщения» и «блокировать пользователей».
 
@@ -30,7 +31,7 @@ export async function moderate({ env, tg, reply, msg, cmd, arg, ownId }) {
   if (await isAdmin(tg, chatId, target.id)) return reply("Админов не трогаю.");
 
   const who = link(target);
-  const fail = (r) => reply(`Не вышло: ${esc(r.description ?? "неизвестная ошибка")}. @Fill_Dev Проверь, что я админ с правами «удалять сообщения» и «блокировать пользователей».`);
+  const fail = async (r) => reply(`Не вышло: ${esc(r.description ?? "неизвестная ошибка")}.${await ownerMention(env, tg, chatId)} Проверь, что я админ с правами «удалять сообщения» и «блокировать пользователей».`);
   const now = Math.floor(Date.now() / 1000);
 
   if (cmd === "mute") {

@@ -86,3 +86,23 @@ describe("расшифровка гс", () => {
     expect(featureOn(await getSettings(env, -1), "transcribe")).toBe(false);
   });
 });
+
+describe('активность в чате', () => {
+  it('админ переключает уровень отдельно для каждого чата, значение сохраняется', async () => {
+    expect((await getSettings(env, -1)).flags.activity ?? 'low').toBe('low');
+    await press(1, 'st:activity');
+    expect((await getSettings(env, -1)).flags.activity).toBe('medium');
+    expect((await getSettings(env, -2)).flags.activity ?? 'low').toBe('low');
+    expect(JSON.parse((await env.DB.prepare('SELECT flags FROM chat_settings WHERE chat_id=-1').first()).flags).activity).toBe('medium');
+    await press(1, 'st:activity');
+    expect((await getSettings(env, -1)).flags.activity).toBe('high');
+    await press(1, 'st:activity');
+    expect((await getSettings(env, -1)).flags.activity).toBe('low');
+  });
+  it('не позволяет участникам менять активность даже при общих настройках', async () => {
+    await press(1, 'st:who');
+    await press(2, 'st:activity');
+    expect((await getSettings(env, -1)).flags.activity).toBeUndefined();
+    expect(answers().at(-1)).toMatch(/админ/);
+  });
+});
