@@ -19,6 +19,7 @@ new_sqlite_classes = ["Downloader"]
 [vars]
 LLM_MODEL = "google/gemini-2.5-flash"
 ROAST_MODEL = "anthropic/claude-sonnet-5.5"
+OWNER_ID = "272525839"
 
 [[d1_databases]]
 binding = "DB"
