@@ -58,14 +58,19 @@ describe("radio", () => {
     expect(fb.results[0]).toMatchObject({ user_id: 7, video_id: "b", rating: 1, performer: "Исп" });
   });
 
-  it("♡̸ на первом треке: исполнитель в bad, хвост удалён, докачка", async () => {
+  it("♡̸ — только про трек: оценка пишется, поток и хвост не трогаются", async () => {
     await started();
+    const g0 = (await getSession(env, 5)).gen;
     const r = await radioPress(env, cq("rd:d:a", 10), del);
     expect(r.mark).toBe("d");
-    expect(deleted).toEqual([11, 12]);
-    expect(sent[0][1].bad).toEqual(["плохой"]);
-    expect(sent[0][1].count).toBe(RADIO_AHEAD - 1);
-    expect(sent[0][1].queue.map((e) => e.id)).toEqual(["q1"]);
+    expect(deleted).toEqual([]);
+    expect(sent).toHaveLength(0);
+    const s = await getSession(env, 5);
+    expect(s.gen).toBe(g0);
+    expect(s.bad).toEqual([]);
+    expect(s.sent).toHaveLength(3);
+    const fb = await env.DB.prepare("SELECT * FROM track_feedback").all();
+    expect(fb.results[0]).toMatchObject({ video_id: "a", rating: -1, performer: "Плохой - Topic" });
   });
 
   it("⏭ докачивает буфер, а при полном просит жать в плеере", async () => {

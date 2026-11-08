@@ -81,7 +81,7 @@ export async function radioPress(env, cq, del = async () => {}) {
     s.sent = s.sent.filter((e) => e.mid <= mid);
     s.queue = s.queue.filter((e) => !later.some((l) => l.id === e.id));
   };
-  s.gen += 1; // старый прогон контейнера на следующем отчёте прервётся
+  if (act !== "d") s.gen += 1; // старый прогон контейнера на следующем отчёте прервётся (дизлайк поток не трогает)
   if (act === "s") {
     await dropLater();
     await env.DB.prepare("DELETE FROM radio_session WHERE chat_id = ?").bind(chatId).run();
@@ -102,14 +102,11 @@ export async function radioPress(env, cq, del = async () => {}) {
     return { answer: "Запомнил, дальше подберу похожее", mark: "u" };
   }
   if (act === "d") {
-    const bad = badKey(cur.performer);
-    if (bad && !s.bad.includes(bad)) s.bad = [...s.bad, bad].slice(-30);
+    // ♡̸ — только про этот трек: в историю оценок, больше не играем; поток и присланные треки не трогаем
     s.queue = s.queue.filter((e) => e.id !== id);
-    await dropLater();
-    s.reseed = null;
+    if (!s.played.includes(id)) s.played.push(id);
     await save(env, s);
-    await fill(env, s, RADIO_AHEAD - 1);
-    return { answer: "Больше такого не будет", mark: "d" };
+    return { answer: "Этот трек больше не поставлю", mark: "d" };
   }
   // ⏭: резерв (плеер и так играет следующий) — просто докачиваем буфер до RADIO_AHEAD
   const need = RADIO_AHEAD - 1 - later.length;
