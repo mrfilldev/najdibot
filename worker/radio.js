@@ -18,7 +18,7 @@ export const radioKeyboard = (id, mark = "") => ({
     [
       { text: mark === "u" ? "👍 ✓" : "👍", callback_data: `rd:u:${id}` },
       { text: mark === "d" ? "👎 ✓" : "👎", callback_data: `rd:d:${id}` },
-      { text: "⏭ Дальше", callback_data: `rd:n:${id}` },
+      { text: "⏭", callback_data: `rd:n:${id}` },
       { text: "⏹", callback_data: `rd:s:${id}` },
     ],
   ],
