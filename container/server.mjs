@@ -418,7 +418,7 @@ async function download({ chat_id, message_id, url, user_id, status_id, phrases 
 }
 
 // Скачивает трек и отправляет аудиофайлом. Возвращает {title, performer}; при ошибке бросает.
-async function sendTrack({ chat_id, message_id, query, accept }) {
+async function sendTrack({ chat_id, message_id, query, accept, markup }) {
   const dir = await mkdtemp(path.join(tmpdir(), "au-"));
   try {
     await tg("sendChatAction", { chat_id, action: "upload_voice" });
@@ -455,11 +455,12 @@ async function sendTrack({ chat_id, message_id, query, accept }) {
     if (message_id) form.set("reply_to_message_id", String(message_id));
     form.set("title", title);
     form.set("performer", performer);
+    if (markup) form.set("reply_markup", JSON.stringify(markup(info)));
     if (info.duration) form.set("duration", String(Math.round(info.duration)));
     form.set("audio", await openAsBlob(file, { type: "audio/mpeg" }), `${(info.title || "track").replace(/[\\/:*?"<>|]/g, "")}.mp3`);
     const r = await fetch(`${API}/sendAudio`, { method: "POST", body: form });
     if (!r.ok) throw new Error(`Telegram: ${r.status} ${(await r.text()).slice(0, 200)}`);
-    return { title, performer };
+    return { title, performer, id: info.id };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -545,6 +546,95 @@ async function djStop({ chat_id }) {
   const s = djSessions.get(chat_id);
   if (s) s.stop = true;
   await tg("sendMessage", { chat_id, text: s ? "Всё, выключаю пластинку." : "Я сейчас и не играю." });
+}
+
+// ---- Радио по треку: очередь из YouTube Mix, состояние хранит Worker (D1), мы качаем и шлём трек с кнопками ----
+const RADIO_MAX_SEC = 600;
+const RADIO_FAILS = 3;
+
+// Список (id, название, канал, длительность) без скачивания; ссылка Mix строится от видео-затравки.
+async function ytList(src, end) {
+  let buf = "";
+  await runYt(["--flat-playlist", "-J", "--playlist-end", String(end), src], [0], (d) => (buf += d));
+  const j = JSON.parse(buf);
+  return (j.entries ?? [j])
+    .filter((e) => e?.id && /^[\w-]{11}$/.test(e.id))
+    .map((e) => ({ id: e.id, title: String(e.title ?? "").slice(0, 120), channel: String(e.channel ?? e.uploader ?? "").slice(0, 80), duration: e.duration ?? null }));
+}
+
+const radioMix = (id) => ytList(`https://www.youtube.com/watch?v=${id}&list=RD${id}`, 40);
+
+// Подходит ли элемент очереди: не играли, длительность в пределах, исполнитель не в списке 👎
+function radioOk(e, played, bad) {
+  if (played.includes(e.id)) return false;
+  if (e.duration && e.duration > RADIO_MAX_SEC) return false;
+  const hay = `${e.title} ${e.channel}`.toLowerCase();
+  return !bad.some((b) => b && hay.includes(b));
+}
+
+async function reportRadio(rec) {
+  try {
+    if (!process.env.WORKER_URL || !process.env.WEBHOOK_SECRET) return;
+    await fetch(`${process.env.WORKER_URL}/log-radio`, {
+      method: "POST",
+      headers: { "X-Telegram-Bot-Api-Secret-Token": process.env.WEBHOOK_SECRET, "content-type": "application/json" },
+      body: JSON.stringify(rec),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (e) {
+    console.error("radio report failed:", e.message);
+  }
+}
+
+const radioMarkup = (info) => ({
+  inline_keyboard: [[
+    { text: "👍", callback_data: `rd:u:${info.id}` },
+    { text: "👎", callback_data: `rd:d:${info.id}` },
+    { text: "⏭ Дальше", callback_data: `rd:n:${info.id}` },
+    { text: "⏹", callback_data: `rd:s:${info.id}` },
+  ]],
+});
+
+async function radio({ chat_id, message_id, query, queue = [], played = [], bad = [], reseed = null }) {
+  try {
+    let q = queue;
+    let seedFirst = null;
+    if (query) {
+      // Старт: затравка — первый результат поиска (или ссылка); играем её саму, дальше её Mix
+      let src = /^https?:\/\//i.test(query) ? query : `ytsearch1:${query}`;
+      if (MUSIC_LOOKUP_RE.test(query)) {
+        const mq = musicQueryFromHtml(await getHtml(query).catch(() => ""));
+        if (!mq) throw new Error("ERROR: не смог понять, что за трек по этой ссылке");
+        src = `ytsearch1:${mq}`;
+      }
+      const [seed] = await ytList(src, 1);
+      if (!seed) throw new Error("ERROR: трек не найден");
+      seedFirst = seed;
+      q = [seed, ...(await radioMix(seed.id).catch(() => [])).filter((e) => e.id !== seed.id)];
+    } else if (reseed) {
+      q = (await radioMix(reseed).catch(() => [])).filter((e) => !played.includes(e.id));
+    }
+    if (!q.length && played.length) q = (await radioMix(played.at(-1)).catch(() => [])).filter((e) => !played.includes(e.id));
+    let fails = 0;
+    let rest = q.filter((e) => e.id === seedFirst?.id || radioOk(e, played, bad));
+    while (rest.length && fails < RADIO_FAILS) {
+      const [cand, ...tail] = rest;
+      rest = tail;
+      try {
+        const t = await sendTrack({ chat_id, message_id: seedFirst ? message_id : null, query: `https://www.youtube.com/watch?v=${cand.id}`, markup: radioMarkup });
+        await reportRadio({ chat_id, track: { id: cand.id, title: t.title, performer: t.performer }, queue: rest });
+        return;
+      } catch (e) {
+        console.error("radio track failed:", cand.id, e.message);
+        fails++;
+      }
+    }
+    throw new Error(rest.length ? "ERROR: подряд не скачалось несколько треков" : "ERROR: закончились идеи для радио");
+  } catch (e) {
+    console.error("radio failed:", e.message);
+    await reportRadio({ chat_id, track: null });
+    await tg("sendMessage", { chat_id, ...(message_id ? { reply_parameters: { message_id } } : {}), text: failText(e, "трек для радио") });
+  }
 }
 
 // ---- Погода голосом: Open-Meteo -> LLM пишет реплику -> TTS (OpenRouter) -> ffmpeg (хрипота, тон выше) -> sendVoice ----
@@ -713,7 +803,7 @@ http
       });
       return;
     }
-    const handler = { "/download": download, "/audio": audio, "/dj": dj, "/dj-stop": djStop, "/weather": weather }[req.url];
+    const handler = { "/download": download, "/audio": audio, "/dj": dj, "/dj-stop": djStop, "/radio": radio, "/weather": weather }[req.url];
     if (req.method !== "POST" || !handler) {
       res.writeHead(200).end("ok");
       return;
@@ -724,7 +814,7 @@ http
       // Отвечаем сразу, работаем в фоне: скачивание может идти долго.
       res.writeHead(202).end("accepted");
       const args = JSON.parse(body);
-      if (handler === download || handler === audio) {
+      if (handler === download || handler === audio || handler === radio) {
         const queued = (pos) =>
           args.status_id && tg("editMessageText", { chat_id: args.chat_id, message_id: args.status_id, text: `В очереди (№${pos}) ⏳` }).catch(() => {});
         withSlot(() => handler(args), queued).catch((e) => console.error(e));

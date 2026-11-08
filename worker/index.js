@@ -5,6 +5,7 @@ import { transcribe, whisper, NICK_RE, nickSet, ROLE_OFF_RE, ROLE_RE, roleEnd, r
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 import { dl, tgBase } from "./remote.js";
+import { RADIO_RE, radioKeyboard, radioPress, radioReport, radioStart } from "./radio.js";
 import { ANY_URL as VIDEO_URL, AUDIO_URL, DOWNLOAD_CMD } from "./sites.js";
 
 // Inline-бот: на @najdibot координаты <фраза> отдаёт место на карте.
@@ -283,6 +284,7 @@ const HELP = [
   "",
   "<b>Музыка</b>",
   "<code>сыграйбля название трека</code> или ссылка — пришлю mp3 (до 15 минут)",
+  "<code>сыграйбля радио название трека</code> — трек и радио по нему: кнопки 👍/👎/⏭ подстраивают поток",
   "<code>диджейбля название трека</code> — включу трек и сам подберу следующие (до 10 подряд, как «Моя волна»); <code>диджейбля стоп</code> — выключить",
   "",
   "<b>Развлечения</b>",
@@ -519,6 +521,12 @@ export default {
         .run();
       return new Response("ok");
     }
+    // Отчёт контейнера о сыгранном треке радио: обновляем очередь и историю сессии.
+    if (new URL(request.url).pathname === "/log-radio") {
+      if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("forbidden", { status: 403 });
+      await radioReport(env, await request.json());
+      return new Response("ok");
+    }
     // Служебное: POST /debug {query} (с секретом вебхука) — пробный запуск загрузки в контейнере, возвращает реальную ошибку.
     if (new URL(request.url).pathname === "/debug") {
       if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("forbidden", { status: 403 });
@@ -580,6 +588,15 @@ export default {
       });
     }
 
+    if (update.callback_query?.data?.startsWith("rd:")) {
+      const cq = update.callback_query;
+      const r = await radioPress(env, cq).catch((e) => (console.error("radio", e.message), { answer: "Не вышло, попробуй ещё раз" }));
+      await tg(env, "answerCallbackQuery", { callback_query_id: cq.id, text: r.answer || undefined });
+      const mid = { chat_id: cq.message.chat.id, message_id: cq.message.message_id };
+      if (r.stop) await tg(env, "editMessageReplyMarkup", { ...mid, reply_markup: { inline_keyboard: [] } });
+      else if (r.mark) await tg(env, "editMessageReplyMarkup", { ...mid, reply_markup: radioKeyboard(String(cq.data).split(":")[2], r.mark) });
+      return new Response("ok");
+    }
     if (update.callback_query?.data?.startsWith("st:")) {
       await settingsCallback(env, (m, b) => tg(env, m, b), update.callback_query).catch((e) => console.error("settings", e.message));
       return new Response("ok");
@@ -726,7 +743,7 @@ export default {
       return new Response("ok");
     }
     // В личке бот только качает (ссылки, «сыграйбля», «диджейбля») и шлёт гс на «робот может сочинить симфонию»; остальное (болтовня, казино, погода…) — только в группах.
-    if (isPrivate && text && !/^\/(start|help)(@\w+)?\b/i.test(text) && !PLAY.test(text) && !DJ.test(text) && !DJ_STOP.test(text) && !VIDEO_URL.test(text) && !SYMPHONY.test(text) && !DOWNLOAD_CMD.test(text)) {
+    if (isPrivate && text && !/^\/(start|help)(@\w+)?\b/i.test(text) && !PLAY.test(text) && !RADIO_RE.test(text) && !DJ.test(text) && !DJ_STOP.test(text) && !VIDEO_URL.test(text) && !SYMPHONY.test(text) && !DOWNLOAD_CMD.test(text)) {
       await reply(env, msg, "В личке я только качаю: кинь ссылку (YouTube, TikTok, Instagram, X, VK, Pinterest, маркетплейсы и др.) или «скачай &lt;ссылка&gt;», либо напиши <code>сыграйбля трек</code>. Поболтать — в группе.");
       return new Response("ok");
     }
@@ -904,6 +921,12 @@ export default {
         reply_parameters: { message_id: target.message_id },
         text: (await withTyping(env, msg.chat.id, () => llmRoast(env, target.text || target.caption, msg.text, target.from.username ?? null, mood0))) ?? `${target.from.username ? `@${target.from.username}, ` : ""}${pickRoast()}`,
       });
+      return new Response("ok");
+    }
+    // «сыграйбля радио <трек>» — трек с кнопками 👍/👎/⏭ и поток рекомендаций (состояние в D1).
+    const radio = on("music") && text && text.match(RADIO_RE);
+    if (radio) {
+      ctx.waitUntil(radioStart(env, msg.chat.id, msg.message_id, radio[1].trim()).catch((e) => console.error("radio start", e.message)));
       return new Response("ok");
     }
     // «сыграйбля <название или ссылка>» — присылаем трек аудиофайлом.
