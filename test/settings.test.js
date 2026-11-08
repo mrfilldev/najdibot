@@ -106,3 +106,13 @@ describe('активность в чате', () => {
     expect(answers().at(-1)).toMatch(/админ/);
   });
 });
+
+describe("владельцы бота", () => {
+  it("владелец меняет настройки и «кто меняет», даже не будучи админом чата", async () => {
+    env.OWNER_IDS = "2,99";
+    await press(2, "st:who");
+    expect((await getSettings(env, -1)).who).toBe("all");
+    await press(2, "st:activity");
+    expect((await getSettings(env, -1)).flags.activity).toBe("medium");
+  });
+});

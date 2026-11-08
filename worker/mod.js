@@ -1,4 +1,4 @@
-import { ownerMention } from './owner.js';
+import { ownerMention, isOwner } from './owner.js';
 // Модерация чата: команды только для админов, цель — автор сообщения, на которое ответили.
 // Боту нужны права админа: «удалять сообщения» и «блокировать пользователей».
 
@@ -13,7 +13,8 @@ async function api(tg, method, body) {
   return (await tg(method, body)).json();
 }
 
-const isAdmin = async (tg, chatId, userId) => {
+const isAdmin = async (env, tg, chatId, userId) => {
+  if (isOwner(env, userId)) return true;
   const r = await api(tg, "getChatMember", { chat_id: chatId, user_id: userId });
   return ["creator", "administrator"].includes(r.result?.status);
 };
@@ -24,11 +25,11 @@ const FREE = Object.fromEntries(Object.keys(MUTED).map((k) => [k, true]));
 // reply(text) отправляет HTML-ответ на команду; tg(method, body) — вызов Bot API.
 export async function moderate({ env, tg, reply, msg, cmd, arg, ownId }) {
   const chatId = msg.chat.id;
-  if (!(await isAdmin(tg, chatId, msg.from.id))) return reply("Эта команда только для админов.");
+  if (!(await isAdmin(env, tg, chatId, msg.from.id))) return reply("Эта команда только для админов.");
   const target = msg.reply_to_message?.from;
   if (!target) return reply("Ответь этой командой на сообщение нужного человека.");
   if (target.is_bot || target.id === ownId) return reply("Ботов не трогаю.");
-  if (await isAdmin(tg, chatId, target.id)) return reply("Админов не трогаю.");
+  if (await isAdmin(env, tg, chatId, target.id)) return reply("Админов не трогаю.");
 
   const who = link(target);
   const fail = async (r) => reply(`Не вышло: ${esc(r.description ?? "неизвестная ошибка")}.${await ownerMention(env, tg, chatId)} Проверь, что я админ с правами «удалять сообщения» и «блокировать пользователей».`);

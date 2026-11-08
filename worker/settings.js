@@ -1,3 +1,4 @@
+import { isOwner } from "./owner.js";
 // Настройки функций бота для группы: /settings с кнопками.
 // Менять включённость функций могут админы; «кто меняет» (admins | all) переключают только админы.
 
@@ -217,7 +218,7 @@ export async function nickReply(env, tg, msg) {
   await ensureNicks(env).catch(() => {});
   const s = await getSettings(env, msg.chat.id);
   const say = (text) => tg("sendMessage", { chat_id: msg.chat.id, reply_parameters: { message_id: msg.message_id }, text });
-  if (s.who !== "all" && !(await isAdmin(tg, msg.chat.id, msg.from.id))) {
+  if (s.who !== "all" && !(await isAdmin(env, tg, msg.chat.id, msg.from.id))) {
     await say("Менять клички могут только админы.");
     return true;
   }
@@ -234,7 +235,8 @@ export async function nickReply(env, tg, msg) {
   return true;
 }
 
-const isAdmin = async (tg, chatId, userId) => {
+const isAdmin = async (env, tg, chatId, userId) => {
+  if (isOwner(env, userId)) return true;
   const r = await (await tg("getChatMember", { chat_id: chatId, user_id: userId })).json();
   return ["creator", "administrator"].includes(r.result?.status);
 };
@@ -253,7 +255,7 @@ export async function settingsCallback(env, tg, cq) {
   if (!m || (m.chat.type !== "group" && m.chat.type !== "supergroup")) return answer();
   const chatId = m.chat.id;
   const s = await getSettings(env, chatId);
-  const admin = await isAdmin(tg, chatId, cq.from.id);
+  const admin = await isAdmin(env, tg, chatId, cq.from.id);
   const edit = (p) => tg("editMessageText", { chat_id: chatId, message_id: m.message_id, ...p });
   if (key === "back") {
     await edit(panel(s));
