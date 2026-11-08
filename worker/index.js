@@ -524,8 +524,7 @@ export default {
     // Отчёт контейнера о сыгранном треке радио: обновляем очередь и историю сессии.
     if (new URL(request.url).pathname === "/log-radio") {
       if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("forbidden", { status: 403 });
-      await radioReport(env, await request.json());
-      return new Response("ok");
+      return Response.json(await radioReport(env, await request.json()));
     }
     // Служебное: POST /debug {query} (с секретом вебхука) — пробный запуск загрузки в контейнере, возвращает реальную ошибку.
     if (new URL(request.url).pathname === "/debug") {
@@ -590,7 +589,7 @@ export default {
 
     if (update.callback_query?.data?.startsWith("rd:")) {
       const cq = update.callback_query;
-      const r = await radioPress(env, cq).catch((e) => (console.error("radio", e.message), { answer: "Не вышло, попробуй ещё раз" }));
+      const r = await radioPress(env, cq, (mids) => Promise.all(mids.map((m) => tg(env, "deleteMessage", { chat_id: cq.message.chat.id, message_id: m }).catch(() => {})))).catch((e) => (console.error("radio", e.message), { answer: "Не вышло, попробуй ещё раз" }));
       await tg(env, "answerCallbackQuery", { callback_query_id: cq.id, text: r.answer || undefined });
       const mid = { chat_id: cq.message.chat.id, message_id: cq.message.message_id };
       if (r.stop) await tg(env, "editMessageReplyMarkup", { ...mid, reply_markup: { inline_keyboard: [] } });

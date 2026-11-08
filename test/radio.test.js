@@ -1,16 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { RADIO_RE, badKey, getSession, radioPress, radioReport, radioStart } from "../worker/radio.js";
+import { RADIO_AHEAD, RADIO_RE, badKey, getSession, radioPress, radioReport, radioStart } from "../worker/radio.js";
 import { fakeDB } from "./d1.js";
 
-let env, sent;
+let env, sent, deleted;
 beforeEach(() => {
   sent = [];
+  deleted = [];
   env = { DB: fakeDB(), DOWNLOADER_URL: "http://dl", WEBHOOK_SECRET: "s" };
   vi.stubGlobal("fetch", vi.fn(async (url, init) => (sent.push([url, JSON.parse(init.body)]), { ok: true })));
 });
 
-const cq = (data, user = 7) => ({ id: "q", data, from: { id: user }, message: { chat: { id: 5 }, message_id: 9 } });
-const track = (id, performer = "Исп") => ({ id, title: "Т" + id, performer });
+const del = async (mids) => deleted.push(...mids);
+const cq = (data, mid, user = 7) => ({ id: "q", data, from: { id: user }, message: { chat: { id: 5 }, message_id: mid } });
+const rep = (id, mid, gen, performer = "Исп", queue = []) => radioReport(env, { chat_id: 5, gen, mid, track: { id, title: "Т" + id, performer }, queue });
+// Сессия, в которой уже прислано три трека (сообщения 10, 11, 12)
+async function started() {
+  await radioStart(env, 5, 1, "Кино");
+  const gen = (await getSession(env, 5)).gen;
+  for (const [i, id] of ["a", "b", "c"].entries()) await rep(id, 10 + i, gen, id === "a" ? "Плохой - Topic" : "Исп", [{ id: "q1" }, { id: "c" }]);
+  sent.length = 0;
+}
 
 describe("radio", () => {
   it("команда: радио + трек", () => {
@@ -19,57 +28,61 @@ describe("radio", () => {
     expect(RADIO_RE.test("сыграйбля Кино")).toBe(false);
   });
 
-  it("старт создаёт сессию и зовёт контейнер", async () => {
+  it("старт просит у контейнера RADIO_AHEAD треков и новое поколение", async () => {
     await radioStart(env, 5, 1, "Кино");
     expect(sent[0][0]).toBe("http://dl/radio");
-    expect(sent[0][1]).toMatchObject({ chat_id: 5, query: "Кино", queue: [] });
-    expect((await getSession(env, 5)).busy_until).toBeGreaterThan(0);
+    expect(sent[0][1]).toMatchObject({ chat_id: 5, query: "Кино", count: RADIO_AHEAD, gen: 1 });
+    await radioStart(env, 5, 2, "Гуф");
+    expect(sent[1][1].gen).toBe(2);
   });
 
-  it("отчёт контейнера кладёт трек в историю и снимает занятость", async () => {
-    await radioStart(env, 5, 1, "Кино");
-    await radioReport(env, { chat_id: 5, track: track("a1"), queue: [{ id: "b2" }] });
+  it("отчёт копит присланные треки; устаревшее поколение прерывается", async () => {
+    await started();
     const s = await getSession(env, 5);
-    expect(s).toMatchObject({ played: ["a1"], busy_until: 0, queue: [{ id: "b2" }] });
-    expect(s.cur.id).toBe("a1");
+    expect(s.sent.map((e) => e.mid)).toEqual([10, 11, 12]);
+    expect(s.played).toEqual(["a", "b", "c"]);
+    expect(await rep("zz", 13, s.gen - 1)).toEqual({ abort: true });
+    expect((await getSession(env, 5)).sent).toHaveLength(3);
   });
 
-  it("👍 пишет оценку и ставит reseed без следующего трека", async () => {
-    await radioStart(env, 5, 1, "x");
-    await radioReport(env, { chat_id: 5, track: track("a1"), queue: [] });
-    sent.length = 0;
-    const r = await radioPress(env, cq("rd:u:a1"));
+  it("♡ на втором треке: удаляет хвост, пишет оценку, строит микс от него", async () => {
+    await started();
+    const g0 = (await getSession(env, 5)).gen;
+    const r = await radioPress(env, cq("rd:u:b", 11), del);
     expect(r.mark).toBe("u");
-    expect(sent).toHaveLength(0);
-    expect((await getSession(env, 5)).reseed).toBe("a1");
+    expect(deleted).toEqual([12]);
+    expect(sent[0][1]).toMatchObject({ count: RADIO_AHEAD - 1, reseed: "b", gen: g0 + 1 });
+    const s = await getSession(env, 5);
+    expect(s.sent.map((e) => e.mid)).toEqual([10, 11]);
     const fb = await env.DB.prepare("SELECT * FROM track_feedback").all();
-    expect(fb.results[0]).toMatchObject({ user_id: 7, video_id: "a1", rating: 1, performer: "Исп" });
+    expect(fb.results[0]).toMatchObject({ user_id: 7, video_id: "b", rating: 1, performer: "Исп" });
   });
 
-  it("👎 исключает исполнителя, чистит очередь и просит следующий", async () => {
-    await radioStart(env, 5, 1, "x");
-    await radioReport(env, { chat_id: 5, track: track("a1", "Плохой - Topic"), queue: [{ id: "a1" }, { id: "b2" }] });
-    sent.length = 0;
-    const r = await radioPress(env, cq("rd:d:a1"));
+  it("♡̸ на первом треке: исполнитель в bad, хвост удалён, докачка", async () => {
+    await started();
+    const r = await radioPress(env, cq("rd:d:a", 10), del);
     expect(r.mark).toBe("d");
-    const body = sent[0][1];
-    expect(body.bad).toEqual(["плохой"]);
-    expect(body.queue.map((e) => e.id)).toEqual(["b2"]);
+    expect(deleted).toEqual([11, 12]);
+    expect(sent[0][1].bad).toEqual(["плохой"]);
+    expect(sent[0][1].count).toBe(RADIO_AHEAD - 1);
+    expect(sent[0][1].queue.map((e) => e.id)).toEqual(["q1"]);
   });
 
-  it("⏭ в период загрузки игнорируется (двойной тап)", async () => {
-    await radioStart(env, 5, 1, "x");
-    sent.length = 0;
-    const r = await radioPress(env, cq("rd:n:a1"));
-    expect(r.answer).toMatch(/Секунду/);
-    expect(sent).toHaveLength(0);
+  it("⏭ докачивает буфер, а при полном просит жать в плеере", async () => {
+    await started();
+    const r = await radioPress(env, cq("rd:n:a", 10), del);
+    expect(r.answer).toBe("");
+    expect(sent[0][1].count).toBe(RADIO_AHEAD - 1 - 2);
+    expect(deleted).toEqual([]);
   });
 
-  it("⏹ удаляет сессию; без сессии — подсказка", async () => {
-    await radioStart(env, 5, 1, "x");
-    expect((await radioPress(env, cq("rd:s:a1"))).stop).toBe(true);
+  it("■ удаляет сессию и хвост; без сессии — подсказка", async () => {
+    await started();
+    expect((await radioPress(env, cq("rd:s:a", 10), del)).stop).toBe(true);
+    expect(deleted).toEqual([11, 12]);
     expect(await getSession(env, 5)).toBeNull();
-    expect((await radioPress(env, cq("rd:n:a1"))).answer).toMatch(/выключено/);
+    expect((await radioPress(env, cq("rd:n:a", 10), del)).answer).toMatch(/выключено/);
+    expect(await rep("x", 20, 1)).toEqual({ abort: true });
   });
 
   it("badKey убирает Topic и регистр", () => {

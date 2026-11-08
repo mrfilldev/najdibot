@@ -460,7 +460,8 @@ async function sendTrack({ chat_id, message_id, query, accept, markup }) {
     form.set("audio", await openAsBlob(file, { type: "audio/mpeg" }), `${(info.title || "track").replace(/[\\/:*?"<>|]/g, "")}.mp3`);
     const r = await fetch(`${API}/sendAudio`, { method: "POST", body: form });
     if (!r.ok) throw new Error(`Telegram: ${r.status} ${(await r.text()).slice(0, 200)}`);
-    return { title, performer, id: info.id };
+    const mid = (await r.json().catch(() => ({})))?.result?.message_id;
+    return { title, performer, id: info.id, mid };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -572,17 +573,20 @@ function radioOk(e, played, bad) {
   return !bad.some((b) => b && hay.includes(b));
 }
 
+// Отчёт Worker'у о присланном треке. Ответ {abort:true}: прогон устарел (нажата кнопка), надо остановиться.
 async function reportRadio(rec) {
   try {
-    if (!process.env.WORKER_URL || !process.env.WEBHOOK_SECRET) return;
-    await fetch(`${process.env.WORKER_URL}/log-radio`, {
+    if (!process.env.WORKER_URL || !process.env.WEBHOOK_SECRET) return {};
+    const r = await fetch(`${process.env.WORKER_URL}/log-radio`, {
       method: "POST",
       headers: { "X-Telegram-Bot-Api-Secret-Token": process.env.WEBHOOK_SECRET, "content-type": "application/json" },
       body: JSON.stringify(rec),
       signal: AbortSignal.timeout(10_000),
     });
+    return (await r.json().catch(() => ({}))) ?? {};
   } catch (e) {
     console.error("radio report failed:", e.message);
+    return {};
   }
 }
 
@@ -595,10 +599,12 @@ const radioMarkup = (info) => ({
   ]],
 });
 
-async function radio({ chat_id, message_id, query, queue = [], played = [], bad = [], reseed = null }) {
+// Шлёт `count` треков подряд (плеер Telegram сам играет их без пауз); после каждого отчитывается Worker'у.
+async function radio({ chat_id, message_id, query, count = 1, gen = 0, queue = [], played = [], bad = [], reseed = null }) {
+  let sent = 0;
   try {
-    let q = queue;
-    let seedFirst = null;
+    let rest = queue;
+    let seed = null;
     if (query) {
       // Старт: затравка — первый результат поиска (или ссылка); играем её саму, дальше её Mix
       let src = /^https?:\/\//i.test(query) ? query : `ytsearch1:${query}`;
@@ -607,33 +613,39 @@ async function radio({ chat_id, message_id, query, queue = [], played = [], bad 
         if (!mq) throw new Error("ERROR: не смог понять, что за трек по этой ссылке");
         src = `ytsearch1:${mq}`;
       }
-      const [seed] = await ytList(src, 1);
+      [seed] = await ytList(src, 1);
       if (!seed) throw new Error("ERROR: трек не найден");
-      seedFirst = seed;
-      q = [seed, ...(await radioMix(seed.id).catch(() => [])).filter((e) => e.id !== seed.id)];
+      rest = [seed, ...(await radioMix(seed.id).catch(() => [])).filter((e) => e.id !== seed.id)];
     } else if (reseed) {
-      q = (await radioMix(reseed).catch(() => [])).filter((e) => !played.includes(e.id));
+      rest = await radioMix(reseed).catch(() => []);
     }
-    if (!q.length && played.length) q = (await radioMix(played.at(-1)).catch(() => [])).filter((e) => !played.includes(e.id));
+    played = [...played];
     let fails = 0;
-    let rest = q.filter((e) => e.id === seedFirst?.id || radioOk(e, played, bad));
-    while (rest.length && fails < RADIO_FAILS) {
+    while (sent < count && fails < RADIO_FAILS) {
+      rest = rest.filter((e) => e.id === seed?.id && sent === 0 || radioOk(e, played, bad));
+      if (!rest.length && played.length) rest = (await radioMix(played.at(-1)).catch(() => [])).filter((e) => radioOk(e, played, bad));
+      if (!rest.length) break;
       const [cand, ...tail] = rest;
       rest = tail;
       try {
-        const t = await sendTrack({ chat_id, message_id: seedFirst ? message_id : null, query: `https://www.youtube.com/watch?v=${cand.id}`, markup: radioMarkup });
-        await reportRadio({ chat_id, track: { id: cand.id, title: t.title, performer: t.performer }, queue: rest });
-        return;
+        const t = await sendTrack({ chat_id, message_id: seed && sent === 0 ? message_id : null, query: `https://www.youtube.com/watch?v=${cand.id}`, markup: radioMarkup });
+        played.push(cand.id);
+        sent++;
+        const r = await reportRadio({ chat_id, gen, mid: t.mid, track: { id: cand.id, title: t.title, performer: t.performer }, queue: rest });
+        if (r.abort) {
+          if (t.mid) await tg("deleteMessage", { chat_id, message_id: t.mid }).catch(() => {});
+          return;
+        }
       } catch (e) {
         console.error("radio track failed:", cand.id, e.message);
+        played.push(cand.id);
         fails++;
       }
     }
-    throw new Error(rest.length ? "ERROR: подряд не скачалось несколько треков" : "ERROR: закончились идеи для радио");
+    if (!sent) throw new Error(fails ? "ERROR: подряд не скачалось несколько треков" : "ERROR: закончились идеи для радио");
   } catch (e) {
     console.error("radio failed:", e.message);
-    await reportRadio({ chat_id, track: null });
-    await tg("sendMessage", { chat_id, ...(message_id ? { reply_parameters: { message_id } } : {}), text: failText(e, "трек для радио") });
+    if (!sent) await tg("sendMessage", { chat_id, ...(message_id ? { reply_parameters: { message_id } } : {}), text: failText(e, "трек для радио") });
   }
 }
 

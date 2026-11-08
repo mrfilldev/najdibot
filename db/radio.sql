@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS radio_session (
   cur TEXT,                           -- JSON: {id,title,performer} последнего присланного
   reseed TEXT,                        -- id трека с 👍: следующий микс строим от него
   busy_until INTEGER NOT NULL DEFAULT 0,
+  sent TEXT NOT NULL DEFAULT '[]',    -- JSON: [{mid,id}] отправленные треки, которые могли быть не прослушаны
+  gen INTEGER NOT NULL DEFAULT 0,     -- поколение прогона: старый прогон контейнера прерывается
   updated INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS track_feedback (

@@ -1,9 +1,10 @@
-// Радио по треку: «сыграйбля радио <трек>» → трек + кнопки 👍/👎/⏭, дальше поток из YouTube Mix.
-// Состояние живёт в D1 (контейнер засыпает), контейнер только качает и шлёт трек (/radio) и отчитывается (/log-radio).
+// Радио по треку: «сыграйбля радио <трек>» → до RADIO_AHEAD треков подряд в чат (плеер Telegram сам играет их без пауз),
+// кнопки ♡ / ♡̸ / ⏭ / ■ корректируют поток. Состояние живёт в D1 (контейнер засыпает), контейнер качает и шлёт (/radio)
+// и после каждого трека отчитывается (/log-radio).
 import { dl } from "./remote.js";
 
 export const RADIO_RE = /^(?:сыграйбля|диджейбля)[\s,:;!.-]+радио[\s,:;!.-]+(.{2,})$/is;
-export const RADIO_BUSY_SEC = 60;
+export const RADIO_AHEAD = 10; // сколько треков держим в чате вперёд
 
 const parse = (s, d) => {
   try {
@@ -29,71 +30,91 @@ export const badKey = (s) => String(s || "").replace(/\s*-\s*topic$/i, "").trim(
 
 export async function getSession(env, chatId) {
   const r = await env.DB.prepare("SELECT * FROM radio_session WHERE chat_id = ?").bind(chatId).first();
-  return r && { ...r, queue: parse(r.queue, []), played: parse(r.played, []), bad: parse(r.bad, []), cur: parse(r.cur, null) };
+  return r && { ...r, queue: parse(r.queue, []), played: parse(r.played, []), bad: parse(r.bad, []), cur: parse(r.cur, null), sent: parse(r.sent, []) };
 }
 
-// Запускает новую сессию (сбрасывает старую) и просит контейнер сыграть первый трек.
+const save = (env, s) =>
+  env.DB.prepare("UPDATE radio_session SET queue = ?, played = ?, bad = ?, cur = ?, reseed = ?, sent = ?, gen = ?, updated = ? WHERE chat_id = ?")
+    .bind(JSON.stringify(s.queue.slice(0, 60)), JSON.stringify(s.played.slice(-300)), JSON.stringify(s.bad), JSON.stringify(s.cur), s.reseed ?? null, JSON.stringify(s.sent.slice(-40)), s.gen, Math.floor(Date.now() / 1000), s.chat_id)
+    .run();
+
+// Просит контейнер прислать ещё `count` треков (новое поколение прерывает прогон, который ещё идёт).
+const fill = (env, s, count) =>
+  dl(env, "/radio", { method: "POST", body: JSON.stringify({ chat_id: s.chat_id, count, gen: s.gen, queue: s.queue, played: s.played, bad: s.bad, reseed: s.reseed ?? null }) });
+
+// Новая сессия (старая сбрасывается): контейнер найдёт затравку и пришлёт её и ещё RADIO_AHEAD-1 треков.
 export async function radioStart(env, chatId, messageId, query) {
   const now = Math.floor(Date.now() / 1000);
   await env.DB.prepare(
-    "INSERT INTO radio_session (chat_id, queue, played, bad, cur, reseed, busy_until, updated) VALUES (?, '[]', '[]', '[]', NULL, NULL, ?, ?) " +
-      "ON CONFLICT(chat_id) DO UPDATE SET queue='[]', played='[]', bad='[]', cur=NULL, reseed=NULL, busy_until=excluded.busy_until, updated=excluded.updated",
-  ).bind(chatId, now + RADIO_BUSY_SEC, now).run();
-  await dl(env, "/radio", { method: "POST", body: JSON.stringify({ chat_id: chatId, message_id: messageId, query, queue: [], played: [], bad: [], reseed: null }) });
+    "INSERT INTO radio_session (chat_id, gen, updated) VALUES (?, 1, ?) " +
+      "ON CONFLICT(chat_id) DO UPDATE SET queue='[]', played='[]', bad='[]', cur=NULL, reseed=NULL, sent='[]', gen=gen+1, updated=excluded.updated",
+  ).bind(chatId, now).run();
+  const s = await getSession(env, chatId);
+  await dl(env, "/radio", { method: "POST", body: JSON.stringify({ chat_id: chatId, message_id: messageId, query, count: RADIO_AHEAD, gen: s.gen, queue: [], played: [], bad: [], reseed: null }) });
 }
 
-// Просит следующий трек: контейнер получает очередь, сыгранное и «плохих» исполнителей.
-export async function radioNext(env, s) {
-  const now = Math.floor(Date.now() / 1000);
-  await env.DB.prepare("UPDATE radio_session SET busy_until = ?, updated = ? WHERE chat_id = ?").bind(now + RADIO_BUSY_SEC, now, s.chat_id).run();
-  await dl(env, "/radio", { method: "POST", body: JSON.stringify({ chat_id: s.chat_id, queue: s.queue, played: s.played, bad: s.bad, reseed: s.reseed }) });
-}
-
-// Отчёт контейнера: сыгран трек `track`, в очереди осталось `queue`. track=null — не вышло, снимаем занятость.
+// Отчёт контейнера: отправлен трек `track` (сообщение `mid`), в очереди осталось `queue`.
+// Ответ {abort:true} — прогон устарел (нажали кнопку или сессию выключили): контейнер удаляет трек и останавливается.
 export async function radioReport(env, r) {
-  const now = Math.floor(Date.now() / 1000);
-  if (!r.track) {
-    await env.DB.prepare("UPDATE radio_session SET busy_until = 0, updated = ? WHERE chat_id = ?").bind(now, r.chat_id).run();
-    return;
-  }
   const s = await getSession(env, r.chat_id);
-  const played = [...(s?.played ?? []), r.track.id].slice(-300);
-  await env.DB.prepare("UPDATE radio_session SET queue = ?, played = ?, cur = ?, reseed = NULL, busy_until = 0, updated = ? WHERE chat_id = ?")
-    .bind(JSON.stringify((r.queue ?? []).slice(0, 60)), JSON.stringify(played), JSON.stringify(r.track), now, r.chat_id).run();
+  if (!s || s.gen !== r.gen) return { abort: true };
+  if (!r.track) return { abort: false };
+  s.queue = r.queue ?? [];
+  s.played = [...s.played, r.track.id];
+  s.cur = r.track;
+  s.reseed = null;
+  s.sent = [...s.sent, { mid: r.mid, id: r.track.id, title: r.track.title, performer: r.track.performer }];
+  await save(env, s);
+  return { abort: false };
 }
 
-// Нажатие кнопки. Возвращает {answer, mark?, stop?, next?}; побочные эффекты (D1) делает здесь.
-export async function radioPress(env, cq) {
+// Нажатие кнопки. `del(mids)` удаляет сообщения. Возвращает {answer, mark?, stop?}.
+export async function radioPress(env, cq, del = async () => {}) {
   const [, act, id] = String(cq.data).split(":");
   const chatId = cq.message?.chat?.id;
   const s = chatId && (await getSession(env, chatId));
   if (!s) return { answer: "Радио уже выключено. Напиши «сыграйбля радио <трек>»" };
-  const now = Math.floor(Date.now() / 1000);
+  const mid = cq.message.message_id;
+  const later = s.sent.filter((e) => e.mid > mid); // присланные позже нажатого: ещё не слушали
+  const dropLater = async () => {
+    if (later.length) await del(later.map((e) => e.mid));
+    s.sent = s.sent.filter((e) => e.mid <= mid);
+    s.queue = s.queue.filter((e) => !later.some((l) => l.id === e.id));
+  };
+  s.gen += 1; // старый прогон контейнера на следующем отчёте прервётся
   if (act === "s") {
+    await dropLater();
     await env.DB.prepare("DELETE FROM radio_session WHERE chat_id = ?").bind(chatId).run();
     return { answer: "Радио выключено", stop: true };
   }
-  if (act === "n" || act === "d") {
-    if (s.busy_until > now) return { answer: "Секунду, ещё грузится" };
-  }
-  const cur = s.cur?.id === id ? s.cur : { id, title: null, performer: null };
+  const now = Math.floor(Date.now() / 1000);
+  const cur = s.sent.find((e) => e.id === id) ?? (s.cur?.id === id ? s.cur : { id, title: null, performer: null });
   if (act === "u" || act === "d") {
     await env.DB.prepare("INSERT INTO track_feedback (ts, user_id, video_id, title, performer, rating) VALUES (?, ?, ?, ?, ?, ?)")
       .bind(now, cq.from.id, id, cur.title, cur.performer, act === "u" ? 1 : -1).run();
   }
   if (act === "u") {
-    // 👍: следующий микс строим от этого трека; играть дальше — по кнопке «Дальше»
-    await env.DB.prepare("UPDATE radio_session SET reseed = ?, updated = ? WHERE chat_id = ?").bind(id, now, chatId).run();
-    return { answer: "Запомнил 👍", mark: "u" };
+    // ♡: присланный вперёд хвост удаляем, дальше строим микс от этого трека
+    await dropLater();
+    s.reseed = id;
+    await save(env, s);
+    await fill(env, s, RADIO_AHEAD - 1);
+    return { answer: "Запомнил, дальше подберу похожее", mark: "u" };
   }
   if (act === "d") {
     const bad = badKey(cur.performer);
     if (bad && !s.bad.includes(bad)) s.bad = [...s.bad, bad].slice(-30);
     s.queue = s.queue.filter((e) => e.id !== id);
-    await env.DB.prepare("UPDATE radio_session SET bad = ?, queue = ?, reseed = NULL WHERE chat_id = ?").bind(JSON.stringify(s.bad), JSON.stringify(s.queue), chatId).run();
-    await radioNext(env, s);
+    await dropLater();
+    s.reseed = null;
+    await save(env, s);
+    await fill(env, s, RADIO_AHEAD - 1);
     return { answer: "Больше такого не будет", mark: "d" };
   }
-  await radioNext(env, s);
+  // ⏭: резерв (плеер и так играет следующий) — просто докачиваем буфер до RADIO_AHEAD
+  const need = RADIO_AHEAD - 1 - later.length;
+  await save(env, s);
+  if (need <= 0) return { answer: "Дальше уже в чате: жми следующий в плеере" };
+  await fill(env, s, need);
   return { answer: "" };
 }
