@@ -3,7 +3,8 @@
 // и после каждого трека отчитывается (/log-radio).
 import { dl } from "./remote.js";
 
-export const RADIO_RE = /^(?:сыграйбля|диджейбля)[\s,:;!.-]+радио[\s,:;!.-]+(.{2,})$/is;
+// Запрос необязателен: «сыграйбля радио» без трека строит радио от недавних ♡ (group 1 тогда undefined).
+export const RADIO_RE = /^(?:сыграйбля|диджейбля)[\s,:;!.-]+радио(?:[\s,:;!.-]+(.{2,}))?[\s,:;!.-]*$/is;
 export const RADIO_AHEAD = 10; // сколько треков держим в чате вперёд
 
 const parse = (s, d) => {
@@ -42,15 +43,28 @@ const save = (env, s) =>
 const fill = (env, s, count) =>
   dl(env, "/radio", { method: "POST", body: JSON.stringify({ chat_id: s.chat_id, count, gen: s.gen, queue: s.queue, played: s.played, bad: s.bad, reseed: s.reseed ?? null }) });
 
+// Затравка без запроса: случайный из последних 20 ♡ пользователя (кроме треков, которые он потом забраковал).
+async function likedSeed(env, userId) {
+  const { results } = await env.DB.prepare(
+    "SELECT DISTINCT video_id FROM track_feedback WHERE user_id = ? AND rating = 1 " +
+      "AND video_id NOT IN (SELECT video_id FROM track_feedback WHERE user_id = ? AND rating = -1) ORDER BY ts DESC LIMIT 20",
+  ).bind(userId, userId).all();
+  return results.length ? results[Math.floor(Math.random() * results.length)].video_id : null;
+}
+
 // Новая сессия (старая сбрасывается): контейнер найдёт затравку и пришлёт её и ещё RADIO_AHEAD-1 треков.
-export async function radioStart(env, chatId, messageId, query) {
+// Без `query` затравка берётся из ♡ пользователя `userId`; если их нет — возвращает {empty:true}, сессию не трогает.
+export async function radioStart(env, chatId, messageId, query, userId) {
+  const liked = query ? null : await likedSeed(env, userId);
+  if (!query && !liked) return { empty: true };
   const now = Math.floor(Date.now() / 1000);
   await env.DB.prepare(
     "INSERT INTO radio_session (chat_id, gen, updated) VALUES (?, 1, ?) " +
       "ON CONFLICT(chat_id) DO UPDATE SET queue='[]', played='[]', bad='[]', cur=NULL, reseed=NULL, sent='[]', gen=gen+1, updated=excluded.updated",
   ).bind(chatId, now).run();
   const s = await getSession(env, chatId);
-  await dl(env, "/radio", { method: "POST", body: JSON.stringify({ chat_id: chatId, message_id: messageId, query, count: RADIO_AHEAD, gen: s.gen, queue: [], played: [], bad: [], reseed: null }) });
+  await dl(env, "/radio", { method: "POST", body: JSON.stringify({ chat_id: chatId, message_id: messageId, query: query ?? null, count: RADIO_AHEAD, gen: s.gen, queue: [], played: liked ? [liked] : [], bad: [], reseed: liked }) });
+  return { empty: false };
 }
 
 // Отчёт контейнера: отправлен трек `track` (сообщение `mid`), в очереди осталось `queue`.

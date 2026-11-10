@@ -21,11 +21,33 @@ async function started() {
   sent.length = 0;
 }
 
+describe("radio без запроса", () => {
+  const like = (user, id, rating = 1) => env.DB.prepare("INSERT INTO track_feedback (ts, user_id, video_id, rating) VALUES (1, ?, ?, ?)").bind(user, id, rating).run();
+  it("нет ♡ — ничего не запускает", async () => {
+    expect(await radioStart(env, 5, 1, null, 7)).toEqual({ empty: true });
+    expect(sent.length).toBe(0);
+  });
+  it("затравка из ♡ пользователя, забракованные и чужие не берутся", async () => {
+    await like(7, "good");
+    await like(7, "bad");
+    await like(7, "bad", -1);
+    await like(8, "other");
+    expect(await radioStart(env, 5, 1, null, 7)).toEqual({ empty: false });
+    const body = sent[0][1];
+    expect(body.query).toBeNull();
+    expect(body.reseed).toBe("good");
+    expect(body.played).toEqual(["good"]);
+  });
+});
+
 describe("radio", () => {
   it("команда: радио + трек", () => {
     expect("сыграйбля радио Кино - Группа крови".match(RADIO_RE)[1]).toBe("Кино - Группа крови");
     expect("диджейбля радио x y".match(RADIO_RE)[1]).toBe("x y");
     expect(RADIO_RE.test("сыграйбля Кино")).toBe(false);
+    expect(RADIO_RE.test("сыграйбля радио")).toBe(true);
+    expect("сыграйбля радио".match(RADIO_RE)[1]).toBeUndefined();
+    expect(RADIO_RE.test("сыграйбля радиотехника")).toBe(false);
   });
 
   it("старт просит у контейнера RADIO_AHEAD треков и новое поколение", async () => {

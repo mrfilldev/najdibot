@@ -925,7 +925,12 @@ export default {
     // «сыграйбля радио <трек>» — трек с кнопками 👍/👎/⏭ и поток рекомендаций (состояние в D1).
     const radio = on("music") && text && text.match(RADIO_RE);
     if (radio) {
-      ctx.waitUntil(radioStart(env, msg.chat.id, msg.message_id, radio[1].trim()).catch((e) => console.error("radio start", e.message)));
+      const q = radio[1]?.trim() || null;
+      ctx.waitUntil(
+        radioStart(env, msg.chat.id, msg.message_id, q, msg.from?.id)
+          .then((r) => r.empty && reply(env, msg, "Пока нет ♡ — не от чего строить радио. Напиши <code>сыграйбля радио &lt;трек&gt;</code> и ставь ♡."))
+          .catch((e) => console.error("radio start", e.message)),
+      );
       return new Response("ok");
     }
     // «сыграйбля <название или ссылка>» — присылаем трек аудиофайлом.
