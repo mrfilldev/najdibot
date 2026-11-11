@@ -135,8 +135,9 @@ async function runTool(env, call) {
 
 // Вызов модели; при forced модель может вызывать инструменты (до 3 кругов), потом даёт финальный ответ.
 async function complete(env, messages, { tools = false, maxTokens = 400 } = {}) {
-  for (let i = 0; i < 4; i++) {
-    const useTools = tools && i < 3;
+  const seenCalls = new Set();
+  for (let i = 0; i < 3; i++) {
+    const useTools = tools && i < 2;
     const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
@@ -147,8 +148,10 @@ async function complete(env, messages, { tools = false, maxTokens = 400 } = {}) 
     if (useTools && msg?.tool_calls?.length) {
       messages.push(msg);
       for (const call of msg.tool_calls) {
-        console.log("tool", call.function?.name);
-        messages.push({ role: "tool", tool_call_id: call.id, content: await runTool(env, call) });
+        const key = `${call.function?.name}:${call.function?.arguments}`;
+        const result = seenCalls.has(key) ? "Этот запрос уже выполнен. Используй полученный результат и ответь." : await runTool(env, call);
+        seenCalls.add(key);
+        messages.push({ role: "tool", tool_call_id: call.id, content: result });
       }
       continue;
     }
@@ -174,7 +177,7 @@ const SERIOUS_SYSTEM = `Ты — Найдибот (в чате тебя зову
 
 export async function decide(env, rows, forced, replied = null, extra = "", asker = null, mood = "") {
   // Ответ на конкретное сообщение: переписку берём только как короткий фон, чтобы бот не смешивал чужие реплики
-  const focused = forced && !!replied;
+  const focused = forced;
   const log = (focused ? rows.slice(-6) : rows).map((r) => `${r.name}: ${r.text}`).join("\n");
   const task = forced
     ? `К тебе обратились напрямую (последнее сообщение адресовано тебе): ответь действием text, по делу и в своём стиле. Молчать нельзя.${focused ? " Отвечай ТОЛЬКО на сообщение, на которое ответили (оно выше), и на фразу человека, который тебя позвал. Остальные реплики чата это лишь фон: не отвечай им, не обращайся к другим людям и не смешивай их слова с этим сообщением." : ""}`
@@ -328,16 +331,16 @@ export async function roastReply(env, { rows, asker, replied, mood, about }) {
 }
 
 // Возвращает true, если что-то сделал (написал, поставил реакцию, прислал мем).
-export async function maybeChat(env, msg, tg, { forced = false, activity = "low" } = {}) {
+export async function maybeChat(env, msg, tg, { forced = false, activity = "low", queued = false } = {}) {
   if (!env.DB || !env.OPENROUTER_API_KEY) return false;
   const chatId = msg.chat.id;
   const now = Date.now();
   const elapsed = now - (lastTalk.get(chatId) ?? 0);
-  if (forced ? elapsed < COOLDOWN_FORCED : !shouldSpontaneouslyReply(activity, Math.random(), elapsed, msg.date ? now / 1000 - msg.date : Infinity)) return false;
+  if (forced ? !queued && elapsed < COOLDOWN_FORCED : !shouldSpontaneouslyReply(activity, Math.random(), elapsed, msg.date ? now / 1000 - msg.date : Infinity)) return false;
   lastTalk.set(chatId, now); // ставим до вызова модели, чтобы не плодить запросы
 
   try {
-    if (forced) await tg("sendChatAction", { chat_id: chatId, action: "typing" });
+    if (forced) await tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
     const rep = msg.reply_to_message;
     let replied = rep && {
       name: rep.from?.first_name || rep.from?.username || "кто-то",
@@ -372,7 +375,7 @@ export async function maybeChat(env, msg, tg, { forced = false, activity = "low"
     }
     if (!d) d = await decide(env, rows, forced, replied, extra, asker, mood + (about ? `\n${about}` : "") + (roleText ? `\n${roleText}` : "")).catch((e) => (console.error("decide", e.message), null));
     // На прямое обращение молчать нельзя: один повтор, потом запасная фраза.
-    if (forced && d?.action !== "text") d = await decide(env, rows, forced, replied, extra, asker, mood).catch(() => null);
+    if (forced && (d?.action !== "text" || !String(d.text || "").trim())) d = { action: "text", text: pick(FALLBACKS) };
     // человеку с плюсом мат недопустим: одна попытка переписать, иначе маскируем матерные слова
     if (forced && (d?.serious || (feel && feel.score > 0)) && d?.action === "text" && MAT_RE.test(String(d.text))) {
       const d2 = await decide(env, rows, forced, replied, extra, asker, `${mood}\nВ твоём прошлом варианте был мат. Перепиши полностью БЕЗ единого матерного слова и без грубости, сохранив содержание и полезность.`).catch(() => null);
@@ -400,7 +403,7 @@ export async function maybeChat(env, msg, tg, { forced = false, activity = "low"
       await tg("sendMessage", forced
         ? { chat_id: chatId, text, reply_parameters: { message_id: msg.message_id } }
         : { chat_id: chatId, text });
-      await remember(env, chatId, 0, "Найдибот", text);
+      await remember(env, chatId, 0, "Найдибот", text).catch((e) => console.error("remember reply", e.message));
       if (forced) await convoTouch(env, chatId, msg.from.id).catch(() => {});
       // отношение к собеседнику сдвигается по оценке самой модели (не чаще раза в 2 минуты на человека)
       const fd = Math.max(-1, Math.min(1, Number(d.feel?.delta) | 0));
@@ -410,7 +413,7 @@ export async function maybeChat(env, msg, tg, { forced = false, activity = "low"
   } catch (e) {
     console.error("chat failed:", e.message);
     if (forced) {
-      await tg("sendMessage", { chat_id: chatId, text: pick(FALLBACKS) + await ownerMention(env, tg, chatId), reply_parameters: { message_id: msg.message_id } }).catch(() => {});
+      await tg("sendMessage", { chat_id: chatId, text: pick(FALLBACKS) + await ownerMention(env, tg, chatId), reply_parameters: { message_id: msg.message_id } });
       return true;
     }
   }
@@ -451,7 +454,9 @@ export async function digestFromRows(env, rows, hours = 12, mood = "") {
       ],
     }),
   });
+  if (!r.ok) throw new Error(`digest API: ${r.status}`);
   const text = (await r.json()).choices?.[0]?.message?.content?.trim();
+  if (!text) throw new Error("digest API returned an empty response");
   return text ? `📰 Сводка за ${hours} ч\n\n${text.slice(0, 1500)}` : null;
 }
 

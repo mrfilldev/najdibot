@@ -35,3 +35,11 @@ binding = "AI"
 
 [observability]
 enabled = true
+
+[[durable_objects.bindings]]
+name = "AGENT_QUEUE"
+class_name = "AgentQueue"
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["AgentQueue"]
