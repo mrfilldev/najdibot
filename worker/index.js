@@ -2,7 +2,7 @@ export { AgentQueue } from "./agent-queue.js";
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
 import { getSettings, featureOn, isDigestCommand, nickReply, showSettings, settingsCallback, optedOut, setOptout, resolveNames, setMember, listMembers, callPeople } from "./settings.js";
-import { transcribe, whisper, NICK_RE, nickSet, ROLE_OFF_RE, ROLE_RE, roleEnd, roleGet, roleStart, LOUD_RE, QUIET_RE, quietEnd, quietLeft, quietStart, ALIAS_RE, APOLOGY_RE, STYLE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, updateFacts, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
+import { FORGET_TOPIC_RE, forgetTopic, transcribe, whisper, NICK_RE, nickSet, ROLE_OFF_RE, ROLE_RE, roleEnd, roleGet, roleStart, LOUD_RE, QUIET_RE, quietEnd, quietLeft, quietStart, ALIAS_RE, APOLOGY_RE, STYLE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, updateFacts, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
 import { dl, tgBase } from "./remote.js";
@@ -276,6 +276,7 @@ const HELP = [
   "<b>Что я умею</b>",
   "",
   "<code>/settings</code> — включить или выключить мои функции, настроить активность в чате, выбрать кого звать в созыв и задать людям клички",
+  "<code>Санни, забудь</code> — перестать возвращаться к текущей теме; можно указать её: <code>Санни, забудь про казино</code>",
   "",
   "<b>Видео</b>",
   "Кинь ссылку (YouTube, Shorts, TikTok, Instagram, Reddit, X, VK, Pinterest, AliExpress и маркетплейсы, облачные диски, музыкальные сайты — около 100 сайтов) или напиши <code>скачай &lt;ссылка&gt;</code> — пришлю видео, фото или аудио",
@@ -645,6 +646,12 @@ export default {
         console.error("digest failed", e.message);
         await reply(env, msg, "Не получилось сделать сводку. Попробуй ещё раз.");
       }
+      return new Response("ok");
+    }
+    if (isGroup && text && !msg.from?.is_bot && FORGET_TOPIC_RE.test(text)) {
+      const match = text.match(FORGET_TOPIC_RE);
+      const topic = await forgetTopic(env, msg.chat.id, match?.[1]).catch((e) => (console.error("forget topic", e.message), null));
+      await reply(env, msg, topic ? `Окей, больше не возвращаюсь к теме «${esc(topic)}», если сами не спросите.` : "Не понял, какую тему забыть. Напиши, например: «Санни, забудь про казино».");
       return new Response("ok");
     }
     // Модерация (только админы, по реплаю): /mute [мин], /unmute, /ban, /unban, /kick, /del, /warn, /unwarn, /warns

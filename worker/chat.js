@@ -175,7 +175,7 @@ const SERIOUS_SYSTEM = `Ты — Найдибот (в чате тебя зову
 - Мужской род о себе; не повторяй одни и те же обращения и словечки из реплики в реплику; личность прежняя (робот-ровесник чата), но без шуток по умолчанию.
 Итоговый ответ в JSON {"action":"text","text":"…","feel":{"delta":0,"note":""}}. Внутри text не используй двойные кавычки ("), только «ёлочки»; переносы строк записывай как \\n. Поле feel: как тебя зацепила реплика (-1, 0, +1) и короткое note.`;
 
-export async function decide(env, rows, forced, replied = null, extra = "", asker = null, mood = "") {
+export async function decide(env, rows, forced, replied = null, extra = "", asker = null, mood = "", topicRule = "") {
   // Ответ на конкретное сообщение: переписку берём только как короткий фон, чтобы бот не смешивал чужие реплики
   const focused = forced;
   const log = (focused ? rows.slice(-6) : rows).map((r) => `${r.name}: ${r.text}`).join("\n");
@@ -203,7 +203,7 @@ export async function decide(env, rows, forced, replied = null, extra = "", aske
   const askerText = asker?.text || "";
   const serious = forced && HELP_RE.test(askerText) && !SELF_RE.test(askerText);
   const aboutSelf = forced && SELF_RE.test(`${asker?.text || ""} ${replied?.text || ""}`.slice(0, 600));
-  const out = await complete(env, [{ role: "system", content: (serious ? SERIOUS_SYSTEM : system) + (serious ? (mood.match(/О ком спрашивают[\s\S]*$/)?.[0] ? `\n\n${mood.match(/О ком спрашивают[\s\S]*$/)[0]}` : "") : (mood ? `\n\n${mood}` : "")) + (aboutSelf ? `\n\n${SELF_KNOWLEDGE}` : "") }, { role: "user", content }], { tools, maxTokens: serious ? 2200 : forced ? 1800 : 400 });
+  const out = await complete(env, [{ role: "system", content: (serious ? SERIOUS_SYSTEM : system) + (serious ? (mood.match(/О ком спрашивают[\s\S]*$/)?.[0] ? `\n\n${mood.match(/О ком спрашивают[\s\S]*$/)[0]}` : "") : (mood ? `\n\n${mood}` : "")) + (aboutSelf ? `\n\n${SELF_KNOWLEDGE}` : "") + (topicRule ? `\n\n${topicRule}` : "") }, { role: "user", content }], { tools, maxTokens: serious ? 2200 : forced ? 1800 : 400 });
   const decision = parseDecision(out, forced);
   if (decision) decision.serious = serious;
   return decision;
@@ -357,6 +357,7 @@ export async function maybeChat(env, msg, tg, { forced = false, activity = "low"
     const extra = forced && urls.length ? (await Promise.all(urls.map(async (u) => `[${u}]\n${await openUrl(u)}`))).join("\n\n").slice(0, 9000) : "";
     const mood = (await moodPrompt(env, chatId, forced ? { id: msg.from?.id, name: msg.from?.first_name } : null)) + (forced ? `\n${isCreator(env, msg.from) ? CREATOR_RULE : await relationPrompt(env, chatId, msg.from.id, msg.from?.first_name || "собеседник")}\n${await relationsSummary(env, chatId)}` : "");
     const roleText = rolePrompt(await roleGet(env, chatId));
+    const topicRule = await topicInstruction(env, chatId).catch(() => "");
     let about = "";
     if (forced) {
       const known = await factsPrompt(env, chatId, [msg.from?.first_name, ...rows.map((r) => r.name)]).catch(() => "");
@@ -370,15 +371,15 @@ export async function maybeChat(env, msg, tg, { forced = false, activity = "low"
     // перепалка: оскорбляет или глубокий минус, и это не просьба помочь: умный ответ вместо обычного
     const roastMode = forced && asker && asker.text && !(HELP_RE.test(asker.text) && !SELF_RE.test(asker.text)) && !(feel && feel.score > 0) && (MAT_RE.test(asker.text) || INSULT_RE.test(asker.text) || (feel && feel.score <= -3));
     if (roastMode) {
-      const line = await roastReply(env, { rows, asker, replied, mood, about }).catch((e) => (console.error("roast", e.message), null));
+      const line = await roastReply(env, { rows, asker, replied, mood: [mood, topicRule].filter(Boolean).join("\n"), about }).catch((e) => (console.error("roast", e.message), null));
       if (line) d = { action: "text", text: line, feel: { delta: 0, note: "" } };
     }
-    if (!d) d = await decide(env, rows, forced, replied, extra, asker, mood + (about ? `\n${about}` : "") + (roleText ? `\n${roleText}` : "")).catch((e) => (console.error("decide", e.message), null));
+    if (!d) d = await decide(env, rows, forced, replied, extra, asker, mood + (about ? `\n${about}` : "") + (roleText ? `\n${roleText}` : ""), topicRule).catch((e) => (console.error("decide", e.message), null));
     // На прямое обращение молчать нельзя: один повтор, потом запасная фраза.
     if (forced && (d?.action !== "text" || !String(d.text || "").trim())) d = { action: "text", text: pick(FALLBACKS) };
     // человеку с плюсом мат недопустим: одна попытка переписать, иначе маскируем матерные слова
     if (forced && (d?.serious || (feel && feel.score > 0)) && d?.action === "text" && MAT_RE.test(String(d.text))) {
-      const d2 = await decide(env, rows, forced, replied, extra, asker, `${mood}\nВ твоём прошлом варианте был мат. Перепиши полностью БЕЗ единого матерного слова и без грубости, сохранив содержание и полезность.`).catch(() => null);
+      const d2 = await decide(env, rows, forced, replied, extra, asker, `${mood}\nВ твоём прошлом варианте был мат. Перепиши полностью БЕЗ единого матерного слова и без грубости, сохранив содержание и полезность.`, topicRule).catch(() => null);
       if (d2?.action === "text") d = { ...d, ...d2 };
       if (MAT_RE.test(String(d.text))) d.text = String(d.text).replace(new RegExp(MAT_RE.source.replace(/^\(\?:\^\|\[\^а-яё\]\)/, ""), "gi"), "…");
     }
@@ -500,6 +501,29 @@ export async function casinoLine(env, { win, player, reelNames, target, targetMs
 export const BOT_NAMES = "(?:найдибля|найдибот|@najdibot|санни|sunny|сан[\\s-]?саныч(?:а|у|ем|е)?|саныч(?:а|у|ем|е)?|саня|саню|сане|саней|санёк|санька|саньку|санек|сань|саньк[аиео])";
 // Обращение к боту где угодно в тексте (слово целиком, чтобы не ловить «саннитов» и «sunnyvale»).
 export const ALIAS_RE = new RegExp(`(?<![а-яёa-z@])${BOT_NAMES}(?![а-яёa-z])`, "i");
+export const FORGET_TOPIC_RE = new RegExp(`^\\s*${BOT_NAMES}[\\s,:!.-]+забудь(?:\\s+(?:про|о)\\s+(.+?))?[\\s.!?]*$`, "i");
+const ensureForgottenTopic = (env) => env.DB.prepare("CREATE TABLE IF NOT EXISTS forgotten_topics (chat_id INTEGER PRIMARY KEY, topic TEXT NOT NULL, expires INTEGER NOT NULL)").run();
+
+// Закрываем тему, не удаляя переписку и долговременные факты.
+export async function forgetTopic(env, chatId, explicitTopic = "") {
+  let topic = String(explicitTopic || "").trim().slice(0, 150);
+  if (!topic) {
+    const rows = (await history(env, chatId)).slice(-12);
+    if (!rows.length) return null;
+    topic = (await ask(env, "Определи тему, к которой бот навязчиво возвращался в последних сообщениях. Ответь только названием темы до 8 слов. Если определить нельзя, ответь НЕТ.", rows.map(r => `${r.name}: ${r.text}`).join("\n"), 80, null, 0, null, 10_000) || "").trim().slice(0, 150);
+  }
+  if (!topic || /^(?:нет|неизвестно|не знаю)[.!\s]*$/i.test(topic)) return null;
+  await ensureForgottenTopic(env);
+  await env.DB.prepare("INSERT OR REPLACE INTO forgotten_topics (chat_id, topic, expires) VALUES (?, ?, ?)").bind(chatId, topic, Math.floor(Date.now() / 1000) + 86400).run();
+  return topic;
+}
+
+export async function topicInstruction(env, chatId) {
+  await ensureForgottenTopic(env);
+  const row = await env.DB.prepare("SELECT topic FROM forgotten_topics WHERE chat_id=? AND expires>?").bind(chatId, Math.floor(Date.now() / 1000)).first();
+  return row ? `Тему «${row.topic}» попросили закрыть. Не возвращайся к ней сам и не упоминай её из старого контекста, настроения или памяти. Если в текущем сообщении прямо спрашивают об этой теме, отвечай по существу.` : "";
+}
+
 export const POKE_RE = new RegExp(`${BOT_NAMES}[\\s,:]*(?:до|при)ебись(?:\\s+(?:до|к)\\s+(.+?))?\\s*[!.?]*$`, "is");
 export const POKE_STOP = new RegExp(`${BOT_NAMES}[\\s,:]*(?:отстань|отвали|хватит|слезь)`, "i");
 const POKE_TURNS = 4; // сколько реплик максимум даёт бот в диалоге
