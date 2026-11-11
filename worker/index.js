@@ -1,6 +1,7 @@
+export { AgentQueue } from "./agent-queue.js";
 import { GAV_OGG_B64, GAV_DURATION } from "./gav.js";
 import { MOD_CMD, moderate } from "./mod.js";
-import { getSettings, featureOn, nickReply, showSettings, settingsCallback, optedOut, setOptout, resolveNames, setMember, listMembers, callPeople } from "./settings.js";
+import { getSettings, featureOn, isDigestCommand, nickReply, showSettings, settingsCallback, optedOut, setOptout, resolveNames, setMember, listMembers, callPeople } from "./settings.js";
 import { transcribe, whisper, NICK_RE, nickSet, ROLE_OFF_RE, ROLE_RE, roleEnd, roleGet, roleStart, LOUD_RE, QUIET_RE, quietEnd, quietLeft, quietStart, ALIAS_RE, APOLOGY_RE, STYLE, SLEEP_CMD, SLEEP_RE, WAKE_RE, sleepEnd, sleepHours, sleepLeft, sleepStart, apologize, bumpFeeling, feelingsStatus, forceReassess, moodPrompt, moodStatus, setMood, POKE_BYE, POKE_QUIT, POKE_RE, POKE_STOP, casinoLine, digest, updateFacts, convoRecent, forget, isForBot, maybeChat, poke, pokeContinue, pokeStop, reels, remember } from "./chat.js";
 import { INSULT_OGG_B64, INSULT_DURATION } from "./insult.js";
 import { Container, getContainer } from "@cloudflare/containers";
@@ -629,15 +630,21 @@ export default {
       await reply(env, msg, `Забыл всё, что ты писал(а) здесь: ${n} сообщ.`);
       return new Response("ok");
     }
-    if (isGroup && text && /^\/(сводка|digest)(@\w+)?\b/i.test(text)) {
+    if (isGroup && text && isDigestCommand(text)) {
+      if (!on("digest")) return new Response("ok");
       if (Date.now() - (lastDigest.get(msg.chat.id) ?? 0) < 300_000) {
         await reply(env, msg, "Сводку я уже делал недавно, подожди пять минут.");
         return new Response("ok");
       }
-      lastDigest.set(msg.chat.id, Date.now());
-      await tg(env, "sendChatAction", { chat_id: msg.chat.id, action: "typing" });
-      const d = await digest(env, msg.chat.id, 12).catch(() => null);
-      await reply(env, msg, d ? esc(d) : "За последние 12 часов в чате почти ничего не было, сводить нечего.");
+      await tg(env, "sendChatAction", { chat_id: msg.chat.id, action: "typing" }).catch(() => {});
+      try {
+        const d = await digest(env, msg.chat.id, 12);
+        await reply(env, msg, d ? esc(d) : "За последние 12 часов в чате почти ничего не было, сводить нечего.");
+        lastDigest.set(msg.chat.id, Date.now());
+      } catch (e) {
+        console.error("digest failed", e.message);
+        await reply(env, msg, "Не получилось сделать сводку. Попробуй ещё раз.");
+      }
       return new Response("ok");
     }
     // Модерация (только админы, по реплаю): /mute [мин], /unmute, /ban, /unban, /kick, /del, /warn, /unwarn, /warns
@@ -1014,7 +1021,12 @@ export default {
         await reply(env, msg, POKE_BYE[Math.floor(Math.random() * POKE_BYE.length)]);
         return new Response("ok");
       }
-      if ((addressed || !quiet) && (await maybeChat(env, msg, (m, b) => tg(env, m, b), { forced: addressed || inConvo, activity: S?.flags.activity }))) {
+      if ((addressed || !quiet) && (addressed || inConvo)) {
+        const queue = env.AGENT_QUEUE.get(env.AGENT_QUEUE.idFromName(String(msg.chat.id)));
+        await queue.fetch("https://agent-queue/", { method: "POST", body: JSON.stringify(msg) });
+        return new Response("ok");
+      }
+      if (!quiet && await maybeChat(env, msg, (m, b) => tg(env, m, b), { activity: S?.flags.activity })) {
         return new Response("ok");
       }
       if (!quiet && shouldBark(msg.chat.id)) {

@@ -116,3 +116,21 @@ describe("владельцы бота", () => {
     expect((await getSettings(env, -1)).flags.activity).toBe("medium");
   });
 });
+
+describe('сводка чата', () => {
+  it('отдельно включается и выключается админом для каждого чата', async () => {
+    const { FEATURES } = await import('../worker/settings.js');
+    expect(FEATURES.some(([key]) => key === 'digest')).toBe(true);
+    expect(featureOn(await getSettings(env, -1), 'digest')).toBe(true);
+    await press(1, 'st:digest');
+    expect(featureOn(await getSettings(env, -1), 'digest')).toBe(false);
+    expect(featureOn(await getSettings(env, -2), 'digest')).toBe(true);
+    await press(1, 'st:digest');
+    expect(featureOn(await getSettings(env, -1), 'digest')).toBe(true);
+  });
+  it('распознаёт обе команды и имя бота', async () => {
+    const { isDigestCommand } = await import('../worker/settings.js');
+    for (const text of ['/сводка', '/сводка@my_bot', '/digest', '/digest@my_bot']) expect(isDigestCommand(text)).toBe(true);
+    for (const text of ['/сводкадругая', '/digest123', 'сводка']) expect(isDigestCommand(text)).toBe(false);
+  });
+});
