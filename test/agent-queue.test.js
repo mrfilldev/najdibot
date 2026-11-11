@@ -29,3 +29,13 @@ it('в прямом обращении учитывает только неда�
   expect(prompt).not.toContain('тема 0');
   expect(prompt).toContain('новая тема');
 });
+
+import { history, remember } from '../worker/chat.js';
+import { fakeDB } from './d1.js';
+it('контекст ожидающего вопроса не включает сообщения, пришедшие после него', async () => {
+  const env = { DB: fakeDB() };
+  await remember(env, -1, 1, 'Аня', 'первый вопрос', 10);
+  await remember(env, -1, 2, 'Борис', 'совсем другая тема', 11);
+  const rows = await history(env, -1, 10);
+  expect(rows.map(row => row.text)).toEqual(['первый вопрос']);
+});

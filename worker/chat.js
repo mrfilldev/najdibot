@@ -60,10 +60,12 @@ async function voiceFromDb(env, chatId, messageId) {
   return row?.text ? row.text.replace(/^\[гс\]\s*/, "") : "";
 }
 
-async function history(env, chatId) {
-  const { results } = await env.DB.prepare("SELECT name, text FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT ?")
-    .bind(chatId, CONTEXT)
-    .all();
+export async function history(env, chatId, throughMessageId = null) {
+  const query = throughMessageId == null
+    ? env.DB.prepare("SELECT name, text FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT ?").bind(chatId, CONTEXT)
+    : env.DB.prepare("SELECT name, text FROM messages WHERE chat_id=? AND id <= (SELECT MAX(id) FROM messages WHERE chat_id=? AND message_id=?) ORDER BY id DESC LIMIT ?")
+      .bind(chatId, chatId, throughMessageId, CONTEXT);
+  const { results } = await query.all();
   return results.reverse();
 }
 
@@ -180,7 +182,7 @@ export async function decide(env, rows, forced, replied = null, extra = "", aske
   const focused = forced;
   const log = (focused ? rows.slice(-6) : rows).map((r) => `${r.name}: ${r.text}`).join("\n");
   const task = forced
-    ? `К тебе обратились напрямую (последнее сообщение адресовано тебе): ответь действием text, по делу и в своём стиле. Молчать нельзя.${focused ? " Отвечай ТОЛЬКО на сообщение, на которое ответили (оно выше), и на фразу человека, который тебя позвал. Остальные реплики чата это лишь фон: не отвечай им, не обращайся к другим людям и не смешивай их слова с этим сообщением." : ""}`
+    ? `К тебе обратились напрямую (последнее сообщение адресовано тебе): ответь действием text, по делу и в своём стиле. Молчать нельзя.${focused ? ` Отвечай на текущую фразу человека${replied ? " и на сообщение, на которое он ответил" : ""}. Остальные реплики чата это лишь фон: не возвращайся к прошлой теме, если текущий вопрос о другом, не обращайся к другим людям и не смешивай их слова с текущим вопросом.` : ""}`
     : "Решай сам: вставить слово, поставить реакцию, прислать мем или промолчать.";
   let userText = `Последние сообщения чата (старые сверху):\n${log}\n\n`;
   if (forced && asker) {
@@ -347,7 +349,7 @@ export async function maybeChat(env, msg, tg, { forced = false, activity = "low"
       text: (rep.text || rep.caption || ((rep.voice || rep.video_note) ? await voiceFromDb(env, chatId, rep.message_id) : "")).slice(0, forced ? 3500 : 500),
       image: rep.photo ? await photoDataUrl(env, rep.photo) : null,
     };
-    const rows = await history(env, chatId);
+    const rows = await history(env, chatId, queued ? msg.message_id : null);
     // фото в самом сообщении (с подписью, обращённой к боту): тоже показываем модели
     if (!replied?.image && msg.photo) {
       replied = { name: msg.from?.first_name || "кто-то", text: (msg.caption || "").slice(0, 1500), image: await photoDataUrl(env, msg.photo) };
@@ -359,7 +361,7 @@ export async function maybeChat(env, msg, tg, { forced = false, activity = "low"
     const roleText = rolePrompt(await roleGet(env, chatId));
     let about = "";
     if (forced) {
-      const known = await factsPrompt(env, chatId, [msg.from?.first_name, ...rows.map((r) => r.name)]).catch(() => "");
+      const known = await factsPrompt(env, chatId, [msg.from?.first_name, rep?.from?.first_name]).catch(() => "");
       const ment = await mentionedPeople(env, chatId, [msg.text || msg.caption || "", rep?.text || rep?.caption || ""], msg.from?.id).catch(() => "");
       const nicks = await nickPrompt(env, chatId).catch(() => "");
       about = [known, ment, nicks].filter(Boolean).join("\n");
